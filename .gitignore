@@ -1,0 +1,13 @@
+.env
+.env.template
+.venv/
+__pycache__/
+*.py[cod]
+
+data/chroma/
+data/market_cruise.db
+data/portfolio_cache.json
+logs/
+*.log
+
+.DS_Store
