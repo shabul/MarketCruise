@@ -34,8 +34,12 @@ def _translate_langgraph_event(lg_event: dict) -> dict | None:
             "portfolio_risk": "portfolio_analysis",
             "synthesize": "final_analysis",
         }.get(name)
-        summary = output.get(result_key, "")[:300] if result_key else ""
-        return _make_sse_event("agent_end", {"agent": name, "summary": summary})
+        full_text = output.get(result_key, "") if result_key else ""
+        summary = full_text[:300]
+        payload = {"agent": name, "summary": summary}
+        if name == "synthesize":
+            payload["report"] = full_text
+        return _make_sse_event("agent_end", payload)
 
     if kind == "on_tool_start":
         return _make_sse_event("tool_start", {
@@ -94,16 +98,16 @@ async def _execute_run(run_id: str, run_type: str) -> None:
             _runs[run_id].update({"status": "completed", "report": report})
         else:
             from ...graphs.daily_graph import stream_daily
-            report_parts = []
+            final_report = ""
             async for lg_event in stream_daily(run_type, config, memory):
                 sse = _translate_langgraph_event(lg_event)
                 if sse:
                     _runs[run_id]["events"].append(sse)
                     if sse["event"] == "agent_end" and "synthesize" in sse["data"]:
                         data = json.loads(sse["data"])
-                        report_parts.append(data.get("summary", ""))
+                        final_report = data.get("report", "") or data.get("summary", "")
             _runs[run_id]["status"] = "completed"
-            _runs[run_id]["report"] = "\n".join(report_parts)
+            _runs[run_id]["report"] = final_report
     except Exception as e:
         _runs[run_id]["status"] = "error"
         _runs[run_id]["error"] = str(e)

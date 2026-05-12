@@ -123,7 +123,11 @@ class SQLiteStore:
         return [dict(r) for r in rows]
 
     # --- Actuals ---
-    def save_actuals(self, date: str, actuals: list[dict]) -> None:
+    def save_actuals(self, date: str | list[dict], actuals: list[dict] | None = None) -> None:
+        # Backward-compatible form: save_actuals(actuals)
+        if actuals is None:
+            actuals = date
+            date = _now()[:10]
         with self._conn() as conn:
             for a in actuals:
                 conn.execute(

@@ -5,7 +5,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.graph import StateGraph, END
 
 from ..state.schema import FeedbackState
-from ..agents.base import make_llm, get_fallback_llm, is_quota_error
+from ..agents.base import make_llm, get_fallback_llm, is_quota_error, configure_usage_store, log_response_usage
 from ..memory.memory_manager import MemoryManager
 
 
@@ -110,6 +110,8 @@ End with a JSON block:
             else:
                 raise
 
+        log_response_usage(response, "weekly_feedback", "feedback_graph", llm.model)
+
         return {
             "synthesized_feedback": response.content,
             "messages": [HumanMessage(content=prompt), response],
@@ -137,6 +139,7 @@ End with a JSON block:
 
 
 def run_weekly_feedback(config: dict, memory: MemoryManager) -> str:
+    configure_usage_store(memory.sqlite)
     graph = build_feedback_graph(memory, config)
     result = graph.invoke({
         "week_label": "",

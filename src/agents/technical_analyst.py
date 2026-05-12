@@ -1,7 +1,7 @@
 from langchain_core.messages import HumanMessage
 from langgraph.prebuilt import create_react_agent
 
-from .base import make_llm, get_fallback_llm, is_quota_error
+from .base import make_llm, get_fallback_llm, is_quota_error, extract_text_content, log_response_usage
 from ..tools.market_tools import (
     fetch_price_snapshot,
     fetch_intraday_snapshot,
@@ -52,19 +52,21 @@ def run_technical_analyst(state: MarketState) -> dict:
     prompt += "Provide your technical analysis with specific signals for each stock."
 
     llm = make_llm(config)
-    agent = create_react_agent(llm, _TOOLS, state_modifier=_SYSTEM)
+    agent = create_react_agent(llm, _TOOLS, prompt=_SYSTEM)
 
     try:
         result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
     except Exception as e:
         if is_quota_error(e):
             llm_fb = get_fallback_llm(config)
-            agent = create_react_agent(llm_fb, _TOOLS, state_modifier=_SYSTEM)
+            agent = create_react_agent(llm_fb, _TOOLS, prompt=_SYSTEM)
             result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
         else:
             raise
 
-    analysis = result["messages"][-1].content
+    final_message = result["messages"][-1]
+    log_response_usage(final_message, f"{run_type}_analysis", "technical_analyst", llm.model)
+    analysis = extract_text_content(final_message.content)
     return {
         "technical_analysis": analysis,
         "next_agent": "portfolio_risk",

@@ -3,7 +3,7 @@ import re
 from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from .base import make_llm, get_fallback_llm, is_quota_error
+from .base import make_llm, get_fallback_llm, is_quota_error, extract_text_content, log_response_usage
 from ..state.schema import MarketState
 
 _SYSTEM = """You are the Chief Market Analyst for an Indian retail investor's personal trading assistant.
@@ -71,7 +71,8 @@ Watchlist: {', '.join(watchlist)}
         else:
             raise
 
-    final_analysis = response.content
+    log_response_usage(response, f"{run_type}_analysis", "orchestrator", llm.model)
+    final_analysis = extract_text_content(response.content)
     predictions = _extract_predictions(final_analysis)
 
     return {

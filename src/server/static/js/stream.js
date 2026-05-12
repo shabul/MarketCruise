@@ -1,5 +1,14 @@
 let currentEventSource = null;
 let toolCallCount = 0;
+let currentAgent = '';
+const pendingToolCards = {};
+const agentLabels = {
+  load_context: 'Context Loader',
+  news_analyst: 'News Analyst',
+  technical_analyst: 'Technical Analyst',
+  portfolio_risk: 'Portfolio Risk',
+  synthesize: 'Orchestrator'
+};
 
 function showTab(name, el) {
   document.querySelectorAll('.section-tab').forEach(t => t.classList.remove('active'));
@@ -31,37 +40,42 @@ function addToolCall(toolName, input) {
 
   toolCallCount++;
   const id = 'tool-' + toolCallCount;
+  if (!pendingToolCards[toolName]) pendingToolCards[toolName] = [];
+  pendingToolCards[toolName].push(id);
   const div = document.createElement('div');
-  div.className = 'tool-card';
+  div.className = 'tool-card pending';
   div.id = id;
+  div.dataset.agent = currentAgent || '';
+  div.dataset.tool = toolName;
+  div.dataset.pending = 'true';
   div.innerHTML = `
     <div class="tool-card-header" onclick="toggleTool('${id}')">
       <i class="bi bi-wrench text-warning"></i>
       <span class="fw-semibold text-warning">${toolName}</span>
+      <span class="tool-meta">${escapeHtml(currentAgent || 'agent')}</span>
       <span class="text-muted ms-auto"><i class="bi bi-chevron-down"></i></span>
     </div>
     <div class="tool-card-body" id="${id}-body">
       <div class="tool-input mb-2"><span class="text-muted">Input: </span>${escapeHtml(input)}</div>
-      <div class="tool-output text-muted" id="${id}-output">Waiting for response...</div>
+      <div class="tool-output pending" id="${id}-output">Waiting for response...</div>
     </div>`;
   document.getElementById('tool-calls-container').appendChild(div);
   return id;
 }
 
 function updateToolOutput(toolName, output) {
-  // Find the last tool card for this tool
-  const cards = document.querySelectorAll('.tool-card');
-  for (let i = cards.length - 1; i >= 0; i--) {
-    const header = cards[i].querySelector('.tool-card-header span.fw-semibold');
-    if (header && header.textContent === toolName) {
-      const outEl = cards[i].querySelector('[id$="-output"]');
-      if (outEl) {
-        outEl.textContent = output;
-        outEl.className = 'tool-output';
-      }
-      break;
-    }
+  const queue = pendingToolCards[toolName] || [];
+  const cardId = queue.shift();
+  if (!cardId) return;
+  const card = document.getElementById(cardId);
+  if (!card) return;
+  const outEl = card.querySelector('[id$="-output"]');
+  if (outEl) {
+    outEl.textContent = output;
+    outEl.className = 'tool-output';
   }
+  card.classList.remove('pending', 'resolved-fallback');
+  card.dataset.pending = 'false';
 }
 
 function toggleTool(id) {
@@ -73,21 +87,101 @@ function clearTools() {
   const container = document.getElementById('tool-calls-container');
   container.innerHTML = '<div class="text-muted small" id="no-tools-msg">No tool calls yet.</div>';
   toolCallCount = 0;
+  Object.keys(pendingToolCards).forEach(k => delete pendingToolCards[k]);
+}
+
+function labelForAgent(agentName) {
+  return agentLabels[agentName] || agentName || 'Agent';
+}
+
+function setThinkingStatus(text) {
+  const el = document.getElementById('thinking-status');
+  if (el) el.textContent = text;
+}
+
+function ensureThinkingSection(agentName) {
+  const container = document.getElementById('llm-stream');
+  let section = document.getElementById(`thinking-${agentName}`);
+  if (section) return section;
+
+  if (container.dataset.empty !== 'false') {
+    container.textContent = '';
+    container.dataset.empty = 'false';
+  }
+
+  section = document.createElement('div');
+  section.className = 'thinking-section running';
+  section.id = `thinking-${agentName}`;
+  section.innerHTML = `
+    <div class="thinking-section-header">
+      <span>${labelForAgent(agentName)}</span>
+      <span class="subtle-text small">Streaming</span>
+    </div>
+    <div class="thinking-section-body" id="thinking-body-${agentName}"></div>
+  `;
+  container.appendChild(section);
+  return section;
 }
 
 function appendLLMToken(token) {
+  const container = document.getElementById('llm-stream');
+  if (!currentAgent) {
+    if (container.textContent === 'Waiting for run...') container.textContent = '';
+    container.textContent += token;
+    container.scrollTop = container.scrollHeight;
+    return;
+  }
+  const section = ensureThinkingSection(currentAgent);
+  const body = section.querySelector('.thinking-section-body');
+  body.textContent += token;
+  container.scrollTop = container.scrollHeight;
+}
+
+function resetThinking() {
   const el = document.getElementById('llm-stream');
-  if (el.textContent === 'Waiting for run...') el.textContent = '';
-  el.textContent += token;
-  el.scrollTop = el.scrollHeight;
+  el.textContent = 'Waiting for run...';
+  el.dataset.empty = 'true';
+  setThinkingStatus('Idle');
+}
+
+function markThinkingSectionDone(agentName) {
+  const section = document.getElementById(`thinking-${agentName}`);
+  if (!section) return;
+  section.classList.remove('running');
+  section.classList.add('done');
+  const status = section.querySelector('.thinking-section-header .small');
+  if (status) status.textContent = 'Completed';
+}
+
+function addAgentSummary(agentName, summary) {
+  if (!summary) return;
+  const section = ensureThinkingSection(agentName);
+  let summaryEl = section.querySelector('.thinking-summary');
+  if (!summaryEl) {
+    summaryEl = document.createElement('div');
+    summaryEl.className = 'thinking-summary';
+    section.appendChild(summaryEl);
+  }
+  summaryEl.textContent = `Summary:\n${summary}`;
+}
+
+function resolvePendingToolsForAgent(agentName) {
+  const cards = document.querySelectorAll(`.tool-card[data-agent="${agentName}"][data-pending="true"]`);
+  cards.forEach(card => {
+    const outEl = card.querySelector('[id$="-output"]');
+    if (outEl && outEl.textContent.trim() === 'Waiting for response...') {
+      outEl.textContent = 'Completed inside the agent run. Detailed tool output was not emitted by the stream, but the agent did finish before the graph moved on.';
+      outEl.className = 'tool-output fallback';
+    }
+    card.classList.remove('pending');
+    card.classList.add('resolved-fallback');
+    card.dataset.pending = 'false';
+  });
 }
 
 function showFinalReport(report) {
-  const section = document.getElementById('final-report-section');
   const el = document.getElementById('final-report');
   el.textContent = report;
-  section.style.display = '';
-  el.scrollIntoView({ behavior: 'smooth' });
 }
 
 function setLiveBadge(live) {
@@ -102,9 +196,13 @@ async function triggerRun(runType) {
 
   // Reset UI
   clearTools();
+  resetThinking();
   document.getElementById('llm-stream').textContent = `Starting ${runType} analysis...`;
-  document.getElementById('final-report-section').style.display = 'none';
+  document.getElementById('llm-stream').dataset.empty = 'true';
+  document.getElementById('final-report').textContent = 'Run in progress. Final synthesis will appear here when complete.';
   ['load_context','news_analyst','technical_analyst','portfolio_risk','synthesize'].forEach(a => setAgentState(a, null));
+  currentAgent = '';
+  setThinkingStatus(`Preparing ${runType} run`);
   setLiveBadge(true);
 
   // Close any existing SSE
@@ -121,12 +219,20 @@ async function triggerRun(runType) {
 
     es.addEventListener('agent_start', e => {
       const d = JSON.parse(e.data);
+      currentAgent = d.agent;
       setAgentState(d.agent, 'running');
+      ensureThinkingSection(d.agent);
+      setThinkingStatus(`${labelForAgent(d.agent)} is running`);
     });
 
     es.addEventListener('agent_end', e => {
       const d = JSON.parse(e.data);
       setAgentState(d.agent, 'done');
+      markThinkingSectionDone(d.agent);
+      addAgentSummary(d.agent, d.summary || '');
+      resolvePendingToolsForAgent(d.agent);
+      if (currentAgent === d.agent) currentAgent = '';
+      setThinkingStatus(`${labelForAgent(d.agent)} finished`);
     });
 
     es.addEventListener('tool_start', e => {
@@ -148,10 +254,12 @@ async function triggerRun(runType) {
       const d = JSON.parse(e.data);
       setLiveBadge(false);
       es.close();
+      setThinkingStatus(d.status === 'completed' ? 'Run completed' : 'Run failed');
       if (d.status === 'completed' && d.report) {
         showFinalReport(d.report);
       } else if (d.status === 'error') {
-        document.getElementById('llm-stream').textContent += `\n\nError: ${d.error}`;
+        const el = document.getElementById('llm-stream');
+        el.textContent += `\n\nError: ${d.error}`;
         ['news_analyst','technical_analyst','portfolio_risk','synthesize'].forEach(a => {
           const box = document.getElementById('box-' + a);
           if (box && box.classList.contains('running')) setAgentState(a, 'error');
@@ -166,6 +274,7 @@ async function triggerRun(runType) {
 
   } catch (err) {
     setLiveBadge(false);
+    setThinkingStatus('Run failed');
     document.getElementById('llm-stream').textContent = 'Error: ' + err.message;
   }
 }
@@ -184,7 +293,7 @@ async function loadHistory() {
     el.innerHTML = runs.map(r => `
       <div class="run-history-item">
         <div class="d-flex justify-content-between align-items-center">
-          <span class="fw-semibold">${r.type} run <span class="badge badge-run-type bg-secondary">${r.run_id}</span></span>
+          <span class="fw-semibold text-capitalize">${r.type} run <span class="badge badge-run-type bg-secondary">${r.id}</span></span>
           <span class="badge ${r.status==='completed'?'bg-success':r.status==='error'?'bg-danger':'bg-warning'}">${r.status}</span>
         </div>
         <small class="text-muted">${r.started_at?.slice(0,19).replace('T',' ')} UTC</small>
@@ -237,7 +346,7 @@ async function loadUsage() {
       const total = rows.reduce((s, r) => s + (r.cost_usd || 0), 0);
       return `<div class="mb-4">
         <h6 class="text-muted">${label} — Total: $${total.toFixed(4)}</h6>
-        <table class="table table-dark table-sm table-borderless" style="font-size:0.8rem">
+        <table class="table table-sm usage-table" style="font-size:0.82rem">
           <thead><tr><th>Model</th><th>Agent</th><th>Calls</th><th>In Tokens</th><th>Out Tokens</th><th>Cost</th></tr></thead>
           <tbody>${rows.map(r=>`<tr>
             <td>${r.model||''}</td><td>${r.agent||''}</td><td>${r.calls||0}</td>

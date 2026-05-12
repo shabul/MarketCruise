@@ -17,6 +17,7 @@ _PRICING = {
 }
 
 _QUOTA_ERRORS = ("quota", "rate limit", "resource exhausted", "429", "resource_exhausted")
+_USAGE_SQLITE = None
 
 
 def _api_key() -> str:
@@ -25,6 +26,11 @@ def _api_key() -> str:
     if key:
         os.environ["GOOGLE_API_KEY"] = key
     return key
+
+
+def configure_usage_store(sqlite_store) -> None:
+    global _USAGE_SQLITE
+    _USAGE_SQLITE = sqlite_store
 
 
 def make_llm(config: dict, use_heavy: bool = False) -> ChatGoogleGenerativeAI:
@@ -60,3 +66,60 @@ def estimate_cost(model: str, input_tok: int, output_tok: int) -> float:
 
 def is_quota_error(e: Exception) -> bool:
     return any(q in str(e).lower() for q in _QUOTA_ERRORS)
+
+
+def extract_text_content(content) -> str:
+    """Normalize LangChain/Gemini message content into a plain string."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(p for p in parts if p).strip()
+    return str(content)
+
+
+def _usage_counts(response) -> tuple[int, int]:
+    usage = getattr(response, "usage_metadata", None) or {}
+    if not isinstance(usage, dict):
+        usage = {}
+    in_tok = (
+        usage.get("input_tokens")
+        or usage.get("prompt_token_count")
+        or usage.get("input_token_count")
+        or 0
+    )
+    out_tok = (
+        usage.get("output_tokens")
+        or usage.get("candidates_token_count")
+        or usage.get("output_token_count")
+        or 0
+    )
+    return int(in_tok or 0), int(out_tok or 0)
+
+
+def _response_model_name(response, fallback_model: str) -> str:
+    meta = getattr(response, "response_metadata", None) or {}
+    if isinstance(meta, dict):
+        return meta.get("model_name") or meta.get("model") or fallback_model
+    return fallback_model
+
+
+def log_response_usage(response, task: str, agent: str, fallback_model: str) -> None:
+    if _USAGE_SQLITE is None:
+        return
+    input_tokens, output_tokens = _usage_counts(response)
+    if input_tokens == 0 and output_tokens == 0:
+        return
+    model = _response_model_name(response, fallback_model)
+    cost_usd = estimate_cost(model, input_tokens, output_tokens)
+    try:
+        _USAGE_SQLITE.log_usage(model, task, agent, input_tokens, output_tokens, cost_usd)
+    except Exception:
+        pass

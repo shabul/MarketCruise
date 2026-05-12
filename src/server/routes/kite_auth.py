@@ -48,9 +48,10 @@ async def kite_callback(request_token: str = "", status: str = "", action: str =
         user_name = session.get("user_name", "")
         return HTMLResponse(_page(
             "Connected!",
-            f"Logged in as {user_name}. Access token saved to .env. "
-            "You can close this tab and return to the dashboard.",
+            f"Logged in as {user_name}. Access token saved to .env. Redirecting to the dashboard now.",
             success=True,
+            redirect_url="/",
+            redirect_delay=0,
         ))
     except Exception as e:
         return HTMLResponse(_page("Error", str(e), success=False))
@@ -62,12 +63,29 @@ async def kite_postback():
     return {"status": "ok"}
 
 
-def _page(title: str, message: str, success: bool) -> str:
+def _page(
+    title: str,
+    message: str,
+    success: bool,
+    redirect_url: str = "",
+    redirect_delay: int = 0,
+) -> str:
     color = "#3fb950" if success else "#f85149"
     icon = "✓" if success else "✗"
+    redirect_meta = ""
+    redirect_script = ""
+    redirect_hint = ""
+    if success and redirect_url:
+        redirect_meta = f'<meta http-equiv="refresh" content="{redirect_delay}; url={redirect_url}">'
+        redirect_script = f"""
+<script>
+  window.location.replace({redirect_url!r});
+</script>"""
+        redirect_hint = f'<p><a href="{redirect_url}">Continue to dashboard</a></p>'
     return f"""<!DOCTYPE html>
 <html>
 <head><title>MarketCruise — Kite Auth</title>
+{redirect_meta}
 <style>
   body {{ background:#0d1117; color:#c9d1d9; font-family:'Segoe UI',sans-serif;
          display:flex; align-items:center; justify-content:center; height:100vh; margin:0; }}
@@ -82,7 +100,9 @@ def _page(title: str, message: str, success: bool) -> str:
     <div class="icon">{icon}</div>
     <h2>{title}</h2>
     <p>{message}</p>
+    {redirect_hint}
     <a href="/">← Back to Dashboard</a>
   </div>
+  {redirect_script}
 </body>
 </html>"""

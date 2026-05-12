@@ -9,6 +9,7 @@ from ..agents.news_analyst import run_news_analyst
 from ..agents.technical_analyst import run_technical_analyst
 from ..agents.portfolio_risk import run_portfolio_risk
 from ..agents.orchestrator import run_orchestrator
+from ..agents.base import configure_usage_store
 from ..memory.memory_manager import MemoryManager
 
 
@@ -89,6 +90,7 @@ def _save_actuals_from_state(state: MarketState, memory: MemoryManager) -> None:
 
 def run_daily(run_type: str, config: dict, memory: MemoryManager) -> str:
     """Execute a daily run and return the final analysis text."""
+    configure_usage_store(memory.sqlite)
     graph = build_daily_graph(memory)
     initial_state: MarketState = {
         "run_id": "",
@@ -111,6 +113,7 @@ def run_daily(run_type: str, config: dict, memory: MemoryManager) -> str:
 
 async def stream_daily(run_type: str, config: dict, memory: MemoryManager):
     """Async generator that streams LangGraph events for SSE delivery."""
+    configure_usage_store(memory.sqlite)
     graph = build_daily_graph(memory)
     initial_state: MarketState = {
         "run_id": "",
