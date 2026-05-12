@@ -12,7 +12,8 @@ Read this whole folder at the start of any new MarketCruise session. It's curate
 │   ├── test.md                  # /test [unit|integration|functional|e2e|all]
 │   ├── server.md                # /server — manage FastAPI server + trigger runs via curl
 │   ├── check-gemini.md          # /check-gemini — diagnose key / quota / model issues
-│   └── refresh-kite.md          # /refresh-kite — daily Zerodha access-token refresh
+│   ├── refresh-kite.md          # /refresh-kite — daily Zerodha access-token refresh
+│   └── merge-codex.md           # /merge-codex — review + selectively merge -codex branch work
 ├── agents/
 │   └── market-analyst.md        # read-only specialist for ad-hoc market data questions
 └── context/                     # background reading
