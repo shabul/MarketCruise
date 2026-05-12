@@ -1,0 +1,40 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest:*)",
+      "Bash(uv run python:*)",
+      "Bash(uv sync)",
+      "Bash(uv add:*)",
+      "Bash(uv pip:*)",
+      "Bash(uv lock)",
+      "Bash(python main.py --run:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git show:*)",
+      "Bash(ls:*)",
+      "Bash(cat .env.template)",
+      "Bash(grep:*)",
+      "Bash(rg:*)",
+      "Bash(find:*)",
+      "Bash(curl http://127.0.0.1:8001/*)",
+      "Bash(curl http://localhost:8001/*)",
+      "Bash(curl -X POST http://localhost:8001/run/*)",
+      "Read",
+      "Edit",
+      "Write",
+      "Grep",
+      "Glob"
+    ],
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git push --force:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git checkout:*)",
+      "Bash(cat .env)",
+      "Bash(echo $GEMINI_API_KEY)",
+      "Bash(echo $KITE_API_SECRET)"
+    ]
+  }
+}
