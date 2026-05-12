@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MarketCruise</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet" />
+  <style>
+    body { background: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', sans-serif; }
+    .sidebar { width: 220px; min-height: 100vh; background: #161b22; border-right: 1px solid #30363d; }
+    .sidebar .nav-link { color: #8b949e; border-radius: 6px; padding: 8px 14px; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { background: #21262d; color: #c9d1d9; }
+    .sidebar .nav-link i { width: 20px; }
+    .main-content { flex: 1; overflow-y: auto; }
+    .topbar { background: #161b22; border-bottom: 1px solid #30363d; padding: 12px 24px; }
+    .agent-box {
+      border: 1px solid #30363d; border-radius: 8px; padding: 12px 16px;
+      background: #161b22; min-width: 140px; text-align: center; position: relative;
+    }
+    .agent-box .status-dot {
+      width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+      background: #30363d; margin-right: 6px;
+    }
+    .agent-box.running .status-dot { background: #f0a500; animation: pulse 1s infinite; }
+    .agent-box.done .status-dot { background: #3fb950; }
+    .agent-box.error .status-dot { background: #f85149; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+    .agent-arrow { color: #30363d; font-size: 1.4rem; align-self: center; padding: 0 4px; }
+    .tool-card {
+      background: #161b22; border: 1px solid #30363d; border-radius: 6px;
+      margin-bottom: 8px; overflow: hidden;
+    }
+    .tool-card-header {
+      padding: 8px 14px; cursor: pointer; display: flex; align-items: center;
+      gap: 8px; font-size: 0.85rem;
+    }
+    .tool-card-header:hover { background: #21262d; }
+    .tool-card-body { padding: 10px 14px; font-size: 0.8rem; border-top: 1px solid #30363d; }
+    .tool-input { color: #79c0ff; }
+    .tool-output { color: #a5d6a7; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+    #llm-stream {
+      background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+      padding: 14px; font-size: 0.85rem; line-height: 1.6; min-height: 100px;
+      max-height: 400px; overflow-y: auto; white-space: pre-wrap;
+    }
+    #final-report {
+      background: #161b22; border: 1px solid #3fb950; border-radius: 8px;
+      padding: 20px; white-space: pre-wrap; font-size: 0.875rem; line-height: 1.7;
+    }
+    .badge-run-type { font-size: 0.7rem; }
+    .run-history-item { border-bottom: 1px solid #21262d; padding: 10px 0; }
+    .accuracy-bar { height: 6px; border-radius: 3px; background: #21262d; }
+    .accuracy-fill { height: 100%; border-radius: 3px; background: #3fb950; }
+    .section-tab { display: none; }
+    .section-tab.active { display: block; }
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: #0d1117; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+    .run-btn { min-width: 130px; }
+    .live-badge { background: #1a3a1a; color: #3fb950; border: 1px solid #3fb950; font-size:0.7rem; padding: 2px 8px; border-radius: 20px; }
+    .idle-badge { background: #1a1a2e; color: #8b949e; border: 1px solid #30363d; font-size:0.7rem; padding: 2px 8px; border-radius: 20px; }
+  </style>
+</head>
+<body>
+
+<div class="d-flex">
+  <!-- Sidebar -->
+  <div class="sidebar d-flex flex-column p-3 gap-1">
+    <div class="d-flex align-items-center gap-2 mb-3 px-2">
+      <i class="bi bi-graph-up-arrow text-success fs-5"></i>
+      <span class="fw-semibold">MarketCruise</span>
+    </div>
+    <a href="#" class="nav-link active" onclick="showTab('today',this)"><i class="bi bi-lightning-fill"></i> Live Run</a>
+    <a href="#" class="nav-link" onclick="showTab('history',this)"><i class="bi bi-clock-history"></i> History</a>
+    <a href="#" class="nav-link" onclick="showTab('portfolio',this)"><i class="bi bi-briefcase"></i> Portfolio</a>
+    <a href="#" class="nav-link" onclick="showTab('accuracy',this)"><i class="bi bi-bar-chart-line"></i> Accuracy</a>
+    <a href="#" class="nav-link" onclick="showTab('usage',this)"><i class="bi bi-cpu"></i> API Usage</a>
+    <div class="mt-auto px-2 pt-3 border-top border-secondary">
+      <small class="text-muted" id="clock"></small>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main-content d-flex flex-column">
+
+    <!-- Topbar -->
+    <div class="topbar d-flex align-items-center justify-content-between">
+      <div class="d-flex align-items-center gap-3">
+        <h6 class="mb-0" id="page-title">Live Run</h6>
+        <span id="live-badge" class="idle-badge">IDLE</span>
+      </div>
+      <div class="d-flex gap-2">
+        <a href="/kite/login" class="btn btn-sm btn-outline-secondary" title="Connect Zerodha Kite">
+          <i class="bi bi-link-45deg"></i> Zerodha
+        </a>
+        <div class="dropdown">
+          <button class="btn btn-sm btn-success dropdown-toggle run-btn" data-bs-toggle="dropdown">
+            <i class="bi bi-play-fill"></i> Run Now
+          </button>
+          <ul class="dropdown-menu dropdown-menu-end dropdown-menu-dark">
+            <li><a class="dropdown-item" href="#" onclick="triggerRun('morning')"><i class="bi bi-sunrise"></i> Morning Analysis</a></li>
+            <li><a class="dropdown-item" href="#" onclick="triggerRun('midday')"><i class="bi bi-sun"></i> Midday Check</a></li>
+            <li><a class="dropdown-item" href="#" onclick="triggerRun('evening')"><i class="bi bi-moon-stars"></i> Evening Review</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="#" onclick="triggerRun('weekly')"><i class="bi bi-arrow-repeat"></i> Weekly Feedback</a></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+
+    <div class="p-4">
+
+      <!-- TODAY / LIVE RUN TAB -->
+      <div id="tab-today" class="section-tab active">
+
+        <!-- Agent flow -->
+        <div class="d-flex align-items-start gap-1 mb-4 flex-wrap">
+          <div class="agent-box" id="box-load_context">
+            <span class="status-dot"></span><span class="fw-semibold" style="font-size:0.8rem">Context</span>
+          </div>
+          <span class="agent-arrow">→</span>
+          <div class="agent-box" id="box-news_analyst">
+            <span class="status-dot"></span><span class="fw-semibold" style="font-size:0.8rem;color:#79c0ff">News<br>Analyst</span>
+          </div>
+          <span class="agent-arrow">→</span>
+          <div class="agent-box" id="box-technical_analyst">
+            <span class="status-dot"></span><span class="fw-semibold" style="font-size:0.8rem;color:#a5d6a7">Technical<br>Analyst</span>
+          </div>
+          <span class="agent-arrow">→</span>
+          <div class="agent-box" id="box-portfolio_risk">
+            <span class="status-dot"></span><span class="fw-semibold" style="font-size:0.8rem;color:#f0a500">Portfolio<br>Risk</span>
+          </div>
+          <span class="agent-arrow">→</span>
+          <div class="agent-box" id="box-synthesize">
+            <span class="status-dot"></span><span class="fw-semibold" style="font-size:0.8rem;color:#bc8cff">Orchestrator</span>
+          </div>
+        </div>
+
+        <!-- Tool calls -->
+        <div class="mb-4">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <h6 class="mb-0 text-muted">Tool Calls</h6>
+            <button class="btn btn-sm btn-outline-secondary" onclick="clearTools()">Clear</button>
+          </div>
+          <div id="tool-calls-container">
+            <div class="text-muted small" id="no-tools-msg">No tool calls yet. Trigger a run to start.</div>
+          </div>
+        </div>
+
+        <!-- LLM stream -->
+        <div class="mb-4">
+          <h6 class="text-muted mb-2">Agent Thinking</h6>
+          <div id="llm-stream" class="text-muted font-monospace">Waiting for run...</div>
+        </div>
+
+        <!-- Final report -->
+        <div id="final-report-section" style="display:none">
+          <h6 class="text-success mb-2"><i class="bi bi-check-circle"></i> Final Report</h6>
+          <div id="final-report"></div>
+        </div>
+      </div>
+
+      <!-- HISTORY TAB -->
+      <div id="tab-history" class="section-tab">
+        <div class="d-flex justify-content-between mb-3">
+          <h6>Recent Runs</h6>
+          <button class="btn btn-sm btn-outline-secondary" onclick="loadHistory()"><i class="bi bi-arrow-clockwise"></i></button>
+        </div>
+        <div id="history-list"><span class="text-muted small">Loading...</span></div>
+      </div>
+
+      <!-- PORTFOLIO TAB -->
+      <div id="tab-portfolio" class="section-tab">
+        <div class="d-flex justify-content-between mb-3">
+          <h6>Portfolio</h6>
+          <button class="btn btn-sm btn-outline-secondary" onclick="loadPortfolio()"><i class="bi bi-arrow-clockwise"></i></button>
+        </div>
+        <div id="portfolio-content"><span class="text-muted small">Loading...</span></div>
+      </div>
+
+      <!-- ACCURACY TAB -->
+      <div id="tab-accuracy" class="section-tab">
+        <div class="d-flex justify-content-between mb-3">
+          <h6>Prediction Accuracy (30 days)</h6>
+          <button class="btn btn-sm btn-outline-secondary" onclick="loadAccuracy()"><i class="bi bi-arrow-clockwise"></i></button>
+        </div>
+        <div id="accuracy-content"><span class="text-muted small">Loading...</span></div>
+      </div>
+
+      <!-- USAGE TAB -->
+      <div id="tab-usage" class="section-tab">
+        <div class="d-flex justify-content-between mb-3">
+          <h6>Gemini API Usage</h6>
+          <button class="btn btn-sm btn-outline-secondary" onclick="loadUsage()"><i class="bi bi-arrow-clockwise"></i></button>
+        </div>
+        <div id="usage-content"><span class="text-muted small">Loading...</span></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/js/stream.js"></script>
+<script src="/js/charts.js"></script>
+<script>
+  // Clock
+  function updateClock() {
+    const now = new Date();
+    document.getElementById('clock').textContent = now.toLocaleTimeString('en-IN', {timeZone:'Asia/Kolkata'}) + ' IST';
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+</script>
+</body>
+</html>

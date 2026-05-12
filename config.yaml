@@ -1,0 +1,56 @@
+watchlist:
+  - RELIANCE
+  - TCS
+  - INFY
+  - HDFCBANK
+  - ICICIBANK
+  - WIPRO
+  - AXISBANK
+  - SBIN
+  - BAJFINANCE
+  - MARUTI
+
+sector_etfs:
+  - NIFTYBEES
+  - BANKBEES
+  - ITBEES
+
+indices:
+  nifty50: "^NSEI"
+  sensex: "^BSESN"
+  sp500: "^GSPC"
+  nasdaq: "^IXIC"
+
+schedules:
+  morning: "08:00"
+  midday: "14:00"
+  evening: "22:00"
+  weekly: "07:00"
+  timezone: "Asia/Kolkata"
+
+gemini:
+  default_model: "gemini-2.0-flash"
+  fallback_model: "gemini-2.5-flash"
+  heavy_model: "gemini-2.5-pro"
+  max_retries: 2
+  timeout_seconds: 30
+
+news:
+  max_articles_per_stock: 5
+  max_articles_sector: 8
+  max_articles_macro: 10
+  lookback_hours_morning: 24
+  lookback_hours_midday: 8
+  lookback_hours_evening: 24
+
+memory:
+  chroma_dir: "data/chroma"
+  sqlite_path: "data/market_cruise.db"
+  top_k_memories: 5
+
+server:
+  host: "0.0.0.0"
+  port: 8001
+
+portfolio:
+  cache_file: "data/portfolio_cache.json"

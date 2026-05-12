@@ -1,0 +1,147 @@
+import asyncio
+import json
+import uuid
+from datetime import datetime
+
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
+from sse_starlette.sse import EventSourceResponse
+
+router = APIRouter()
+
+# In-memory store for active/recent runs
+_runs: dict[str, dict] = {}
+
+
+def _make_sse_event(event_type: str, data: dict) -> dict:
+    return {"event": event_type, "data": json.dumps(data)}
+
+
+def _translate_langgraph_event(lg_event: dict) -> dict | None:
+    """Translate a LangGraph astream_events event into our SSE format."""
+    kind = lg_event.get("event", "")
+    name = lg_event.get("name", "")
+    data = lg_event.get("data", {})
+
+    if kind == "on_chain_start" and name in ("news_analyst", "technical_analyst", "portfolio_risk", "synthesize", "load_context"):
+        return _make_sse_event("agent_start", {"agent": name})
+
+    if kind == "on_chain_end" and name in ("news_analyst", "technical_analyst", "portfolio_risk", "synthesize", "load_context"):
+        output = data.get("output", {})
+        result_key = {
+            "news_analyst": "news_analysis",
+            "technical_analyst": "technical_analysis",
+            "portfolio_risk": "portfolio_analysis",
+            "synthesize": "final_analysis",
+        }.get(name)
+        summary = output.get(result_key, "")[:300] if result_key else ""
+        return _make_sse_event("agent_end", {"agent": name, "summary": summary})
+
+    if kind == "on_tool_start":
+        return _make_sse_event("tool_start", {
+            "tool": name,
+            "input": str(data.get("input", ""))[:500],
+        })
+
+    if kind == "on_tool_end":
+        return _make_sse_event("tool_end", {
+            "tool": name,
+            "output": str(data.get("output", ""))[:800],
+        })
+
+    if kind == "on_chat_model_stream":
+        chunk = data.get("chunk")
+        token = ""
+        if chunk and hasattr(chunk, "content"):
+            token = chunk.content
+        if token:
+            return _make_sse_event("llm_stream", {"token": token})
+
+    return None
+
+
+@router.post("/run/{run_type}")
+async def trigger_run(run_type: str):
+    """Trigger a market analysis run. The run executes in background; stream via /stream/{run_id}."""
+    if run_type not in ("morning", "midday", "evening", "weekly"):
+        return JSONResponse({"error": f"Unknown run type: {run_type}"}, status_code=400)
+
+    run_id = str(uuid.uuid4())[:8]
+    _runs[run_id] = {
+        "id": run_id,
+        "type": run_type,
+        "status": "pending",
+        "started_at": datetime.now().isoformat(),
+        "events": [],
+        "report": "",
+    }
+
+    asyncio.create_task(_execute_run(run_id, run_type))
+    return {"run_id": run_id, "status": "started"}
+
+
+async def _execute_run(run_id: str, run_type: str) -> None:
+    from ..app import get_config, get_memory
+    config = get_config()
+    memory = get_memory()
+
+    _runs[run_id]["status"] = "running"
+
+    try:
+        if run_type == "weekly":
+            from ...graphs.feedback_graph import run_weekly_feedback
+            report = run_weekly_feedback(config, memory)
+            _runs[run_id].update({"status": "completed", "report": report})
+        else:
+            from ...graphs.daily_graph import stream_daily
+            report_parts = []
+            async for lg_event in stream_daily(run_type, config, memory):
+                sse = _translate_langgraph_event(lg_event)
+                if sse:
+                    _runs[run_id]["events"].append(sse)
+                    if sse["event"] == "agent_end" and "synthesize" in sse["data"]:
+                        data = json.loads(sse["data"])
+                        report_parts.append(data.get("summary", ""))
+            _runs[run_id]["status"] = "completed"
+            _runs[run_id]["report"] = "\n".join(report_parts)
+    except Exception as e:
+        _runs[run_id]["status"] = "error"
+        _runs[run_id]["error"] = str(e)
+        _runs[run_id]["events"].append(
+            _make_sse_event("error", {"message": str(e)})
+        )
+
+
+@router.get("/stream/{run_id}")
+async def stream_run(run_id: str):
+    """SSE endpoint: streams events for an active or recently completed run."""
+    if run_id not in _runs:
+        return JSONResponse({"error": "Run not found"}, status_code=404)
+
+    async def event_generator():
+        sent = 0
+        while True:
+            run = _runs.get(run_id, {})
+            events = run.get("events", [])
+
+            while sent < len(events):
+                ev = events[sent]
+                yield {"event": ev["event"], "data": ev["data"]}
+                sent += 1
+
+            if run.get("status") in ("completed", "error"):
+                yield {"event": "run_complete", "data": json.dumps({
+                    "status": run["status"],
+                    "report": run.get("report", ""),
+                    "error": run.get("error", ""),
+                })}
+                break
+
+            await asyncio.sleep(0.2)
+
+    return EventSourceResponse(event_generator())
+
+
+@router.get("/runs")
+async def list_runs():
+    return list(reversed(list(_runs.values())))
