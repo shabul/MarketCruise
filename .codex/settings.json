@@ -1,0 +1,14 @@
+{
+  "project": "MarketCruise",
+  "default_branch": "feature/init",
+  "read_order": [
+    "AGENTS.md",
+    ".codex/context/quick-reference.md",
+    ".codex/context/conventions.md"
+  ],
+  "notes": [
+    "Prefer implementation truth over stale public docs.",
+    "Daily runtime is sequential StateGraph routing, not supervisor-parallel orchestration.",
+    "Preserve dual-write behavior between SQLite and ChromaDB."
+  ]
+}
