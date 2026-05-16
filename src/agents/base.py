@@ -33,6 +33,10 @@ def configure_usage_store(sqlite_store) -> None:
     _USAGE_SQLITE = sqlite_store
 
 
+def get_usage_store():
+    return _USAGE_SQLITE
+
+
 def make_llm(config: dict, use_heavy: bool = False) -> ChatGoogleGenerativeAI:
     model = (
         config.get("heavy_model", "gemini-1.5-pro")

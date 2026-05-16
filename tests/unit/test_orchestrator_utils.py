@@ -98,3 +98,21 @@ def test_is_quota_error_normal_exception():
     assert not is_quota_error(ValueError("bad input shape"))
     assert not is_quota_error(Exception("connection timeout"))
     assert not is_quota_error(Exception("invalid API key"))
+
+
+@pytest.mark.unit
+def test_extract_richer_prediction_format():
+    text = '''Analysis complete.
+```json
+{"stocks": [{"ticker": "TCS", "direction": "BUY", "confidence": "High",
+  "reasoning": "Strong Q4", "entry_price": 3500.0, "stop_loss": 3250.0,
+  "target": 4000.0, "timeframe": "1 week"}]}
+```'''
+    result = _extract_predictions(text)
+    assert len(result["stocks"]) == 1
+    stock = result["stocks"][0]
+    assert stock["ticker"] == "TCS"
+    assert stock["entry_price"] == 3500.0
+    assert stock["stop_loss"] == 3250.0
+    assert stock["target"] == 4000.0
+    assert stock["timeframe"] == "1 week"

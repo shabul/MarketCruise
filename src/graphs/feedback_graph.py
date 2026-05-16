@@ -35,7 +35,10 @@ def build_feedback_graph(memory: MemoryManager, config: dict):
 
     def compute_accuracy(state: FeedbackState) -> dict:
         preds = state["prediction_records"]
-        actuals = {a["ticker"]: a for a in state["actual_records"]}
+        actuals = {
+            (a["ticker"], a["date"]): a
+            for a in state["actual_records"]
+        }
 
         total, correct = 0, 0
         by_ticker: dict = {}
@@ -43,7 +46,7 @@ def build_feedback_graph(memory: MemoryManager, config: dict):
 
         for p in preds:
             ticker = p["ticker"]
-            actual = actuals.get(ticker)
+            actual = actuals.get((ticker, p["date"]))
             if not actual:
                 missed.append(ticker)
                 continue

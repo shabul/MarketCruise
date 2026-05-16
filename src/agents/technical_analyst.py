@@ -27,7 +27,7 @@ _TOOLS = [fetch_price_snapshot, fetch_intraday_snapshot, fetch_eod_snapshot,
           fetch_index_snapshot, fetch_market_breadth]
 
 
-def run_technical_analyst(state: MarketState) -> dict:
+async def run_technical_analyst(state: MarketState) -> dict:
     config = state["config"]
     watchlist = state["watchlist"]
     run_type = state["run_type"]
@@ -39,9 +39,11 @@ def run_technical_analyst(state: MarketState) -> dict:
         "midday": "Fetch intraday snapshot + index snapshot + market breadth.",
         "evening": "Fetch EOD data + index snapshot.",
     }.get(run_type, "Fetch price snapshot.")
+    market_regime = state.get("market_regime", "Unknown")
 
     prompt = (
         f"Run type: {run_type}\n"
+        f"Market Regime: {market_regime}\n"
         f"Watchlist: {', '.join(watchlist)}\n"
         f"{data_instruction}\n\n"
     )
@@ -55,12 +57,12 @@ def run_technical_analyst(state: MarketState) -> dict:
     agent = create_react_agent(llm, _TOOLS, prompt=_SYSTEM)
 
     try:
-        result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
+        result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
     except Exception as e:
         if is_quota_error(e):
             llm_fb = get_fallback_llm(config)
             agent = create_react_agent(llm_fb, _TOOLS, prompt=_SYSTEM)
-            result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
+            result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
         else:
             raise
 
@@ -69,6 +71,5 @@ def run_technical_analyst(state: MarketState) -> dict:
     analysis = extract_text_content(final_message.content)
     return {
         "technical_analysis": analysis,
-        "next_agent": "portfolio_risk",
         "messages": result["messages"],
     }

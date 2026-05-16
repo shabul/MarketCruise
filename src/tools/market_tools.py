@@ -116,3 +116,80 @@ def fetch_index_snapshot() -> str:
         except Exception as e:
             rows.append(f"{name}: unavailable ({e})")
     return "\n".join(rows) if rows else "Index data unavailable."
+
+
+def fetch_global_premarket() -> str:
+    """
+    Fetch pre-market global context: US futures, Asian indices, DXY, crude, VIX.
+    Called programmatically in load_context (not a @tool). Fails gracefully per symbol.
+    """
+    symbols = {
+        "ES Futures (S&P)": "ES=F",
+        "NQ Futures (Nasdaq)": "NQ=F",
+        "Nikkei 225": "^N225",
+        "Hang Seng": "^HSI",
+        "USD Index (DXY)": "DX-Y.NYB",
+        "Crude Oil (WTI)": "CL=F",
+        "India VIX": "^INDIAVIX",
+        "Nifty50": "^NSEI",
+    }
+    rows = []
+    for name, sym in symbols.items():
+        try:
+            hist = yf.download(sym, period="5d", interval="1d", progress=False, auto_adjust=True)
+            if len(hist) < 2:
+                rows.append(f"{name}: no data")
+                continue
+            if isinstance(hist.columns, pd.MultiIndex):
+                latest = float(hist["Close"][sym].iloc[-1])
+                prev = float(hist["Close"][sym].iloc[-2])
+            else:
+                latest = float(hist["Close"].iloc[-1])
+                prev = float(hist["Close"].iloc[-2])
+            pct = (latest / prev - 1) * 100
+            rows.append(f"{name}: {latest:,.2f} ({pct:+.2f}%)")
+        except Exception as e:
+            rows.append(f"{name}: unavailable ({e})")
+    return "\n".join(rows) if rows else "Global pre-market data unavailable."
+
+
+def _compute_market_regime() -> str:
+    """
+    Compute market regime from Nifty50 history and India VIX.
+    Returns one of: Trending Up | Trending Down | Ranging | High Volatility | Unknown.
+    Called programmatically in load_context (not a @tool).
+    """
+    try:
+        hist = yf.download("^NSEI", period="1y", interval="1d", progress=False, auto_adjust=True)
+        if isinstance(hist.columns, pd.MultiIndex):
+            close = hist["Close"]["^NSEI"].dropna()
+        else:
+            close = hist["Close"].dropna()
+
+        if len(close) < 50:
+            return "Unknown"
+
+        latest = float(close.iloc[-1])
+        ma50 = float(close.tail(50).mean())
+        ma200 = float(close.tail(200).mean()) if len(close) >= 200 else float(close.mean())
+
+        vix_val = None
+        try:
+            vix_hist = yf.download("^INDIAVIX", period="5d", interval="1d", progress=False, auto_adjust=True)
+            if not vix_hist.empty:
+                if isinstance(vix_hist.columns, pd.MultiIndex):
+                    vix_val = float(vix_hist["Close"]["^INDIAVIX"].iloc[-1])
+                else:
+                    vix_val = float(vix_hist["Close"].iloc[-1])
+        except Exception:
+            pass
+
+        if vix_val is not None and vix_val > 20:
+            return "High Volatility"
+        if latest > ma50 and ma50 > ma200:
+            return "Trending Up"
+        if latest < ma50 and ma50 < ma200:
+            return "Trending Down"
+        return "Ranging"
+    except Exception:
+        return "Unknown"

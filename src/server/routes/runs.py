@@ -3,9 +3,16 @@ import json
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
+
+
+class RunRequest(BaseModel):
+    watchlist: list[str] | None = None
+    model: str | None = None
+    notes: str | None = None
 
 router = APIRouter()
 
@@ -23,15 +30,18 @@ def _translate_langgraph_event(lg_event: dict) -> dict | None:
     name = lg_event.get("name", "")
     data = lg_event.get("data", {})
 
-    if kind == "on_chain_start" and name in ("news_analyst", "technical_analyst", "portfolio_risk", "synthesize", "load_context"):
+    _TRACKED = ("news_analyst", "technical_analyst", "portfolio_risk", "options_analyst", "synthesize", "load_context")
+
+    if kind == "on_chain_start" and name in _TRACKED:
         return _make_sse_event("agent_start", {"agent": name})
 
-    if kind == "on_chain_end" and name in ("news_analyst", "technical_analyst", "portfolio_risk", "synthesize", "load_context"):
+    if kind == "on_chain_end" and name in _TRACKED:
         output = data.get("output", {})
         result_key = {
             "news_analyst": "news_analysis",
             "technical_analyst": "technical_analysis",
             "portfolio_risk": "portfolio_analysis",
+            "options_analyst": "options_analysis",
             "synthesize": "final_analysis",
         }.get(name)
         full_text = output.get(result_key, "") if result_key else ""
@@ -65,7 +75,7 @@ def _translate_langgraph_event(lg_event: dict) -> dict | None:
 
 
 @router.post("/run/{run_type}")
-async def trigger_run(run_type: str):
+async def trigger_run(run_type: str, body: RunRequest = Body(default_factory=RunRequest)):
     """Trigger a market analysis run. The run executes in background; stream via /stream/{run_id}."""
     if run_type not in ("morning", "midday", "evening", "weekly"):
         return JSONResponse({"error": f"Unknown run type: {run_type}"}, status_code=400)
@@ -80,11 +90,19 @@ async def trigger_run(run_type: str):
         "report": "",
     }
 
-    asyncio.create_task(_execute_run(run_id, run_type))
+    asyncio.create_task(_execute_run(
+        run_id, run_type,
+        watchlist_override=body.watchlist,
+        model_override=body.model,
+    ))
     return {"run_id": run_id, "status": "started"}
 
 
-async def _execute_run(run_id: str, run_type: str) -> None:
+async def _execute_run(
+    run_id: str, run_type: str,
+    watchlist_override: list[str] | None = None,
+    model_override: str | None = None,
+) -> None:
     from ..app import get_config, get_memory
     config = get_config()
     memory = get_memory()
@@ -94,12 +112,19 @@ async def _execute_run(run_id: str, run_type: str) -> None:
     try:
         if run_type == "weekly":
             from ...graphs.feedback_graph import run_weekly_feedback
+            memory.sqlite.start_run(run_id, "weekly")
             report = run_weekly_feedback(config, memory)
+            memory.sqlite.finish_run(run_id, report)
             _runs[run_id].update({"status": "completed", "report": report})
         else:
             from ...graphs.daily_graph import stream_daily
             final_report = ""
-            async for lg_event in stream_daily(run_type, config, memory):
+            async for lg_event in stream_daily(
+                run_type, config, memory,
+                watchlist_override=watchlist_override,
+                model_override=model_override,
+                initial_run_id=run_id,
+            ):
                 sse = _translate_langgraph_event(lg_event)
                 if sse:
                     _runs[run_id]["events"].append(sse)

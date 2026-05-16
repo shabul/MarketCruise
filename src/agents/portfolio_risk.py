@@ -26,7 +26,7 @@ Always be direct. Give specific ₹ amounts and % figures. Risk calls must have 
 _TOOLS = [fetch_holdings, fetch_positions, fetch_todays_trades, calculate_portfolio_pnl, fetch_fii_dii]
 
 
-def run_portfolio_risk(state: MarketState) -> dict:
+async def run_portfolio_risk(state: MarketState) -> dict:
     config = state["config"]
     run_type = state["run_type"]
     memories = "\n".join(state.get("retrieved_memories", []))
@@ -37,8 +37,9 @@ def run_portfolio_risk(state: MarketState) -> dict:
         "midday": "Fetch holdings, open positions, FII/DII. Make HOLD/EXIT calls for each position.",
         "evening": "Fetch holdings, today's trades, FII/DII. Calculate P&L. Review trade timing.",
     }.get(run_type, "Fetch holdings and calculate P&L.")
+    market_regime = state.get("market_regime", "Unknown")
 
-    prompt = f"Run type: {run_type}\n{instructions}\n\n"
+    prompt = f"Run type: {run_type}\nMarket Regime: {market_regime}\n{instructions}\n\n"
     if memories:
         prompt += f"Relevant past portfolio context:\n{memories}\n\n"
     if feedback:
@@ -49,12 +50,12 @@ def run_portfolio_risk(state: MarketState) -> dict:
     agent = create_react_agent(llm, _TOOLS, prompt=_SYSTEM)
 
     try:
-        result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
+        result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
     except Exception as e:
         if is_quota_error(e):
             llm_fb = get_fallback_llm(config)
             agent = create_react_agent(llm_fb, _TOOLS, prompt=_SYSTEM)
-            result = agent.invoke({"messages": [HumanMessage(content=prompt)]})
+            result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
         else:
             raise
 
@@ -63,6 +64,5 @@ def run_portfolio_risk(state: MarketState) -> dict:
     analysis = extract_text_content(final_message.content)
     return {
         "portfolio_analysis": analysis,
-        "next_agent": "synthesize",
         "messages": result["messages"],
     }

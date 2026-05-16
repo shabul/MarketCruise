@@ -1,4 +1,5 @@
 """Functional tests — FastAPI HTTP endpoints via HTTPX async test client."""
+import asyncio
 import json
 import tempfile
 
@@ -180,3 +181,212 @@ async def test_post_weekly_run_returns_run_id(fastapi):
         resp = await client.post("/run/weekly")
     assert resp.status_code == 200
     assert "run_id" in resp.json()
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_api_predictions_today_empty(fastapi):
+    async with _client(fastapi) as client:
+        resp = await client.get("/api/predictions/today")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_api_hypotheses_empty(fastapi):
+    async with _client(fastapi) as client:
+        resp = await client.get("/api/hypotheses")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_api_hypotheses_create_and_list(fastapi):
+    async with _client(fastapi) as client:
+        post_resp = await client.post("/api/hypotheses", json={
+            "ticker": "TESTCO", "thesis": "Integration test thesis",
+            "evidence": "test signal", "entry_price": 1000.0,
+        })
+        assert post_resp.status_code == 200
+        hyp_id = post_resp.json()["id"]
+        assert hyp_id
+
+        list_resp = await client.get("/api/hypotheses")
+        ids = [h["id"] for h in list_resp.json()]
+        assert hyp_id in ids
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_api_hypotheses_update(fastapi):
+    async with _client(fastapi) as client:
+        post_resp = await client.post("/api/hypotheses", json={
+            "ticker": "UPDATECO", "thesis": "Will be updated",
+        })
+        hyp_id = post_resp.json()["id"]
+
+        patch_resp = await client.patch(f"/api/hypotheses/{hyp_id}", json={"status": "won", "outcome": "Target hit"})
+        assert patch_resp.status_code == 200
+        assert patch_resp.json()["ok"] is True
+
+        list_resp = await client.get("/api/hypotheses?status=won")
+        found = [h for h in list_resp.json() if h["id"] == hyp_id]
+        assert len(found) == 1
+        assert found[0]["status"] == "won"
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_api_hypotheses_delete(fastapi):
+    async with _client(fastapi) as client:
+        post_resp = await client.post("/api/hypotheses", json={"ticker": "DELCO", "thesis": "To be deleted"})
+        hyp_id = post_resp.json()["id"]
+
+        del_resp = await client.delete(f"/api/hypotheses/{hyp_id}")
+        assert del_resp.status_code == 200
+        assert del_resp.json()["ok"] is True
+
+        del2 = await client.delete(f"/api/hypotheses/{hyp_id}")
+        assert del2.status_code == 404
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_api_feedback_empty(fastapi):
+    async with _client(fastapi) as client:
+        resp = await client.get("/api/feedback")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["report"] == ""
+    assert data["date"] is None
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_api_accuracy_uses_ticker_and_date(fastapi):
+    import src.server.app as app_module
+
+    memory = app_module.get_memory()
+    memory.sqlite.save_predictions("run-1", "2026-05-15", [
+        {"ticker": "TCS", "direction": "BUY", "confidence": "High", "reasoning": "Day 1"},
+    ])
+    memory.sqlite.save_predictions("run-2", "2026-05-16", [
+        {"ticker": "TCS", "direction": "SELL", "confidence": "High", "reasoning": "Day 2"},
+    ])
+    memory.sqlite.save_actuals("2026-05-15", [{"ticker": "TCS", "close": 100.0, "pct_change": 1.2}])
+    memory.sqlite.save_actuals("2026-05-16", [{"ticker": "TCS", "close": 98.0, "pct_change": -1.1}])
+
+    async with _client(fastapi) as client:
+        resp = await client.get("/api/accuracy")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["total_predictions"] == 2
+    assert data["by_ticker"]["TCS"]["total"] == 2
+    assert data["by_ticker"]["TCS"]["correct"] == 2
+    history = data["by_ticker"]["TCS"]["history"]
+    assert {entry["date"] for entry in history} == {"2026-05-15", "2026-05-16"}
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_weekly_run_persists_feedback_report(fastapi, monkeypatch):
+    import src.graphs.feedback_graph as feedback_graph
+
+    monkeypatch.setattr(feedback_graph, "run_weekly_feedback", lambda config, memory: "Weekly lessons report")
+
+    async with _client(fastapi) as client:
+        post_resp = await client.post("/run/weekly")
+        assert post_resp.status_code == 200
+        run_id = post_resp.json()["run_id"]
+
+        for _ in range(20):
+            runs_resp = await client.get("/runs")
+            run = next((r for r in runs_resp.json() if r["id"] == run_id), None)
+            if run and run["status"] == "completed":
+                break
+            await asyncio.sleep(0.05)
+
+        feedback_resp = await client.get("/api/feedback")
+        history_resp = await client.get("/api/history")
+
+    assert feedback_resp.status_code == 200
+    assert feedback_resp.json()["report"] == "Weekly lessons report"
+
+    history = history_resp.json()
+    weekly = next(r for r in history if r["run_id"] == run_id)
+    assert weekly["run_type"] == "weekly"
+    assert weekly["report_text"] == "Weekly lessons report"
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_execute_run_passes_http_run_id_to_daily_graph(fastapi, monkeypatch):
+    import src.server.routes.runs as runs_module
+    import src.graphs.daily_graph as daily_graph
+
+    captured = {}
+
+    async def fake_stream_daily(run_type, config, memory, **kwargs):
+        captured["run_type"] = run_type
+        captured["initial_run_id"] = kwargs.get("initial_run_id")
+        yield {"event": "on_chain_start", "name": "load_context", "data": {}}
+        yield {
+            "event": "on_chain_end",
+            "name": "synthesize",
+            "data": {"output": {"final_analysis": "Synthetic report"}},
+        }
+
+    monkeypatch.setattr(daily_graph, "stream_daily", fake_stream_daily)
+
+    runs_module._runs["http-run-123"] = {
+        "id": "http-run-123",
+        "type": "morning",
+        "status": "pending",
+        "started_at": "2026-05-17T00:00:00",
+        "events": [],
+        "report": "",
+    }
+
+    await runs_module._execute_run("http-run-123", "morning")
+
+    assert captured["run_type"] == "morning"
+    assert captured["initial_run_id"] == "http-run-123"
+    assert runs_module._runs["http-run-123"]["status"] == "completed"
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_api_config_returns_watchlist(fastapi):
+    async with _client(fastapi) as client:
+        resp = await client.get("/api/config")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "watchlist" in data
+    assert isinstance(data["watchlist"], list)
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_run_trigger_accepts_json_body(fastapi):
+    async with _client(fastapi) as client:
+        resp = await client.post("/run/morning", json={"watchlist": ["TCS"], "model": "gemini-2.0-flash", "notes": "test"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "run_id" in body
+    assert body["status"] == "started"
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_api_premarket_returns_list(fastapi):
+    """Premarket endpoint returns list with label keys (yfinance may return null values in test env)."""
+    async with _client(fastapi) as client:
+        resp = await client.get("/api/market/premarket")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data, list)
+    assert len(data) == 8
+    assert all("label" in item for item in data)

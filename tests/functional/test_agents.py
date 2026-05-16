@@ -8,6 +8,7 @@ pytestmark = pytest.mark.usefixtures("gemini_available")
 from src.agents.news_analyst import run_news_analyst
 from src.agents.technical_analyst import run_technical_analyst
 from src.agents.portfolio_risk import run_portfolio_risk
+from src.agents.options_analyst import run_options_analyst
 from src.agents.orchestrator import run_orchestrator
 
 
@@ -17,7 +18,7 @@ def test_news_analyst_morning(morning_state):
     assert "news_analysis" in result
     assert isinstance(result["news_analysis"], str)
     assert len(result["news_analysis"]) > 50
-    assert result.get("next_agent") == "technical_analyst"
+    assert "next_agent" not in result
 
 
 @pytest.mark.functional
@@ -32,7 +33,7 @@ def test_news_analyst_contains_sentiment(morning_state):
 def test_news_analyst_midday(midday_state):
     result = run_news_analyst(midday_state)
     assert result["news_analysis"]
-    assert result["next_agent"] == "technical_analyst"
+    assert "next_agent" not in result
 
 
 @pytest.mark.functional
@@ -41,7 +42,7 @@ def test_technical_analyst_morning(morning_state):
     assert "technical_analysis" in result
     assert isinstance(result["technical_analysis"], str)
     assert len(result["technical_analysis"]) > 50
-    assert result.get("next_agent") == "portfolio_risk"
+    assert "next_agent" not in result
 
 
 @pytest.mark.functional
@@ -58,7 +59,7 @@ def test_portfolio_risk_morning(morning_state):
     assert "portfolio_analysis" in result
     assert isinstance(result["portfolio_analysis"], str)
     assert len(result["portfolio_analysis"]) > 20
-    assert result.get("next_agent") == "synthesize"
+    assert "next_agent" not in result
 
 
 @pytest.mark.functional
@@ -69,6 +70,24 @@ def test_portfolio_risk_handles_no_holdings(morning_state):
     has_data = "₹" in result["portfolio_analysis"]
     has_fallback = any(w in text for w in ["no holdings", "unavailable", "no open", "no completed"])
     assert has_data or has_fallback, f"Unexpected portfolio result: {text[:300]}"
+
+
+@pytest.mark.functional
+def test_options_analyst_morning(morning_state):
+    result = run_options_analyst(morning_state)
+    assert "options_analysis" in result
+    assert isinstance(result["options_analysis"], str)
+    assert len(result["options_analysis"]) > 10
+    assert "next_agent" not in result
+
+
+@pytest.mark.functional
+def test_options_analyst_skipped_for_evening(morning_state):
+    state = dict(morning_state)
+    state["run_type"] = "evening"
+    result = run_options_analyst(state)
+    assert "skipped" in result["options_analysis"].lower()
+    assert result["messages"] == []
 
 
 @pytest.mark.functional
@@ -87,12 +106,13 @@ def test_orchestrator_with_seeded_analyses(morning_state):
         "Holdings: RELIANCE 10 units @ ₹2600 avg\n"
         "P&L: +₹2000 unrealised"
     )
+    state["options_analysis"] = "NIFTY PCR: 0.95 (neutral). TCS call OI highest at 3600."
 
     result = run_orchestrator(state)
 
     assert "final_analysis" in result
     assert len(result["final_analysis"]) > 50
-    assert result.get("next_agent") == "done"
+    assert "next_agent" not in result
 
     predictions = result.get("predictions", {})
     assert isinstance(predictions, dict)
@@ -104,10 +124,10 @@ def test_orchestrator_predictions_have_stocks_key(morning_state):
     state["news_analysis"] = "RELIANCE: Bullish. TCS: Bearish."
     state["technical_analysis"] = "RELIANCE trending up. TCS below MA50."
     state["portfolio_analysis"] = "No open positions."
+    state["options_analysis"] = "Options data unavailable."
 
     result = run_orchestrator(state)
     predictions = result.get("predictions", {})
-    # predictions should be a dict; if LLM produces structured output, "stocks" key appears
     assert isinstance(predictions, dict)
 
 
@@ -117,6 +137,7 @@ def test_orchestrator_messages_populated(morning_state):
     state["news_analysis"] = "Market broadly positive."
     state["technical_analysis"] = "Indices near 52w highs."
     state["portfolio_analysis"] = "No holdings found."
+    state["options_analysis"] = "PCR neutral."
 
     result = run_orchestrator(state)
     assert "messages" in result

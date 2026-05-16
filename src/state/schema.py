@@ -14,13 +14,15 @@ class MarketState(TypedDict):
     retrieved_memories: list[str]        # ChromaDB semantic search results
     feedback_context: str                # latest weekly feedback summary
 
-    # Supervisor routing
-    next_agent: str                      # which agent to call next
+    # Market context loaded at run start
+    global_context: str       # pre-market global futures/FX/Asian markets (morning only)
+    market_regime: str        # Trending Up | Trending Down | Ranging | High Volatility
 
     # Sub-agent outputs
     news_analysis: str
     technical_analysis: str
     portfolio_analysis: str
+    options_analysis: str     # options flow agent output
 
     # Orchestrator synthesis
     final_analysis: str
