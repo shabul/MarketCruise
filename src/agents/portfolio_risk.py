@@ -10,6 +10,7 @@ from ..tools.portfolio_tools import (
 )
 from ..tools.nse_tools import fetch_fii_dii
 from ..state.schema import MarketState
+from ..utils.logging import log, ToolCallLogger
 
 _SYSTEM = """You are a Portfolio Risk Analyst for an Indian retail investor trading NSE stocks.
 
@@ -46,22 +47,31 @@ async def run_portfolio_risk(state: MarketState) -> dict:
         prompt += f"Last week's portfolio feedback:\n{feedback}\n\n"
     prompt += "Provide your portfolio risk assessment."
 
+    log.agent_start("PortfolioRisk")
     llm = make_llm(config)
     agent = create_react_agent(llm, _TOOLS, prompt=_SYSTEM)
+    cb = ToolCallLogger("PortfolioRisk")
 
     try:
-        result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
+        result = await agent.ainvoke(
+            {"messages": [HumanMessage(content=prompt)]},
+            config={"callbacks": [cb]},
+        )
     except Exception as e:
         if is_quota_error(e):
             llm_fb = get_fallback_llm(config)
             agent = create_react_agent(llm_fb, _TOOLS, prompt=_SYSTEM)
-            result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
+            result = await agent.ainvoke(
+                {"messages": [HumanMessage(content=prompt)]},
+                config={"callbacks": [cb]},
+            )
         else:
             raise
 
     final_message = result["messages"][-1]
     log_response_usage(final_message, f"{run_type}_analysis", "portfolio_risk", llm.model)
     analysis = extract_text_content(final_message.content)
+    log.agent_done("PortfolioRisk", result["messages"])
     return {
         "portfolio_analysis": analysis,
         "messages": result["messages"],

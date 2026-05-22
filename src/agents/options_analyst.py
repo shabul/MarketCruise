@@ -4,6 +4,7 @@ from langgraph.prebuilt import create_react_agent
 from .base import make_llm, get_fallback_llm, is_quota_error, extract_text_content, log_response_usage
 from ..tools.options_tools import fetch_options_chain, fetch_index_options
 from ..state.schema import MarketState
+from ..utils.logging import log, ToolCallLogger
 
 _SYSTEM = """You are an Options Flow Analyst for Indian equity markets (NSE).
 
@@ -25,6 +26,7 @@ _TOOLS = [fetch_options_chain, fetch_index_options]
 
 async def run_options_analyst(state: MarketState) -> dict:
     if state.get("run_type") == "evening":
+        log.options_skipped()
         return {
             "options_analysis": "Options analysis skipped for evening run (market closed).",
             "messages": [],
@@ -47,22 +49,31 @@ async def run_options_analyst(state: MarketState) -> dict:
         prompt += f"Relevant past context:\n{memories}\n\n"
     prompt += "Provide your options flow assessment."
 
+    log.agent_start("OptionsAnalyst")
     llm = make_llm(config)
     agent = create_react_agent(llm, _TOOLS, prompt=_SYSTEM)
+    cb = ToolCallLogger("OptionsAnalyst")
 
     try:
-        result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
+        result = await agent.ainvoke(
+            {"messages": [HumanMessage(content=prompt)]},
+            config={"callbacks": [cb]},
+        )
     except Exception as e:
         if is_quota_error(e):
             llm_fb = get_fallback_llm(config)
             agent = create_react_agent(llm_fb, _TOOLS, prompt=_SYSTEM)
-            result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
+            result = await agent.ainvoke(
+                {"messages": [HumanMessage(content=prompt)]},
+                config={"callbacks": [cb]},
+            )
         else:
             raise
 
     final_message = result["messages"][-1]
     log_response_usage(final_message, f"{run_type}_analysis", "options_analyst", llm.model)
     analysis = extract_text_content(final_message.content)
+    log.agent_done("OptionsAnalyst", result["messages"])
     return {
         "options_analysis": analysis,
         "messages": result["messages"],

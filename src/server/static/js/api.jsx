@@ -33,6 +33,7 @@ window.API = {
     on('tool_start',   (d) => handlers.onToolStart?.(d));
     on('tool_end',     (d) => handlers.onToolEnd?.(d));
     on('llm_stream',   (d) => handlers.onToken?.(d));
+    on('error',        (d) => handlers.onRunError?.(d));
     on('run_complete', (d) => { handlers.onComplete?.(d); es.close(); });
     es.onerror = () => { handlers.onError?.(); es.close(); };
     return es;

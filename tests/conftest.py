@@ -1,3 +1,4 @@
+import asyncio
 import os
 from datetime import date
 
@@ -32,6 +33,55 @@ def gemini_available():
         _gemini_checked = True
     if _gemini_skip_reason:
         pytest.skip(f"Gemini API unavailable: {_gemini_skip_reason[:120]}")
+
+
+_gemini_probe_result: str | None = "unchecked"  # "ok" | "skip:<reason>" | "unchecked"
+
+
+@pytest.fixture(scope="session", autouse=False)
+def gemini_quota_ok(gemini_available):
+    """Session fixture: probe the Gemini API with a 10s timeout.
+
+    A single lightweight call is enough to confirm quota is currently available.
+    This avoids 60+ seconds of tenacity retries per test when quota is exhausted.
+    Unlike the base `gemini_available` fixture, this actually hits the API.
+    """
+    global _gemini_probe_result
+    if _gemini_probe_result == "ok":
+        return
+    if _gemini_probe_result != "unchecked":
+        pytest.skip(_gemini_probe_result.removeprefix("skip:"))
+
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_core.messages import HumanMessage
+
+    async def _probe(model: str) -> str:
+        llm = ChatGoogleGenerativeAI(model=model, temperature=0.0)
+        try:
+            await asyncio.wait_for(
+                llm.ainvoke([HumanMessage(content="ok")]),
+                timeout=15.0,
+            )
+            return "ok"
+        except asyncio.TimeoutError:
+            return "timeout"
+        except Exception as e:
+            return str(e)[:200]
+
+    config_models = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"]
+    skip_keywords = ("quota", "rate limit", "resource exhausted", "429", "resource_exhausted", "permission_denied", "403")
+
+    for model in config_models:
+        result = asyncio.run(_probe(model))
+        if result == "ok":
+            _gemini_probe_result = "ok"
+            return
+        if result == "timeout" or any(k in result.lower() for k in skip_keywords):
+            _gemini_probe_result = f"skip:Gemini quota/access unavailable ({model}): {result[:100]}"
+            pytest.skip(_gemini_probe_result.removeprefix("skip:"))
+
+    _gemini_probe_result = "skip:No working Gemini model found"
+    pytest.skip("No working Gemini model found")
 
 
 @pytest.fixture(scope="session")

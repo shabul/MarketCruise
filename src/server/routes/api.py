@@ -144,12 +144,12 @@ async def get_feedback():
     from ..app import get_memory
     memory = get_memory()
     runs = memory.sqlite.get_recent_runs(limit=50)
-    weekly = [r for r in runs if r.get("run_type") == "weekly"]
+    weekly = [r for r in runs if r.get("run_type") == "weekly" and (r.get("report_text") or "").strip()]
     if not weekly:
         return {"report": "", "date": None, "lessons": []}
     latest = weekly[0]
     return {
-        "report": latest.get("report_text", ""),
+        "report": latest.get("report_text") or "",
         "date": latest.get("started_at"),
         "lessons": [],
     }
@@ -160,7 +160,7 @@ async def get_premarket():
     import yfinance as yf
     SYMBOLS = [
         ("Nifty 50",  "^NSEI"),
-        ("Bank Nifty", "^NIFTYBANK"),
+        ("Bank Nifty", "^NIFTY_BANK"),
         ("India VIX", "^INDIAVIX"),
         ("USD/INR",   "USDINR=X"),
         ("Crude Oil", "CL=F"),

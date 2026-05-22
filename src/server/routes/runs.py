@@ -10,7 +10,7 @@ from sse_starlette.sse import EventSourceResponse
 
 
 class RunRequest(BaseModel):
-    watchlist: list[str] | None = None
+    watchlist: list[str] | str | None = None
     model: str | None = None
     notes: str | None = None
 
@@ -74,12 +74,33 @@ def _translate_langgraph_event(lg_event: dict) -> dict | None:
     return None
 
 
+def _run_error_payload(exc: Exception) -> dict:
+    message = str(exc).strip() or exc.__class__.__name__
+    lower = message.lower()
+    retry_after = None
+    if "retry in " in lower:
+        tail = lower.split("retry in ", 1)[1]
+        retry_after = tail.split("s", 1)[0].strip()
+    return {
+        "message": message,
+        "retry_after_seconds": retry_after,
+        "kind": "quota" if any(word in lower for word in ("quota", "resource_exhausted", "429", "rate limit")) else "runtime",
+    }
+
+
 @router.post("/run/{run_type}")
 async def trigger_run(run_type: str, body: RunRequest = Body(default_factory=RunRequest)):
     """Trigger a market analysis run. The run executes in background; stream via /stream/{run_id}."""
     if run_type not in ("morning", "midday", "evening", "weekly"):
         return JSONResponse({"error": f"Unknown run type: {run_type}"}, status_code=400)
 
+    # Clean and parse watchlist
+    watchlist = []
+    if isinstance(body.watchlist, str):
+        watchlist = [s.strip().upper() for s in body.watchlist.split(",") if s.strip()]
+    elif isinstance(body.watchlist, list):
+        watchlist = [s.strip().upper() for s in body.watchlist if s.strip()]
+    
     run_id = str(uuid.uuid4())[:8]
     _runs[run_id] = {
         "id": run_id,
@@ -92,7 +113,7 @@ async def trigger_run(run_type: str, body: RunRequest = Body(default_factory=Run
 
     asyncio.create_task(_execute_run(
         run_id, run_type,
-        watchlist_override=body.watchlist,
+        watchlist_override=watchlist or None,
         model_override=body.model,
     ))
     return {"run_id": run_id, "status": "started"}
@@ -104,10 +125,14 @@ async def _execute_run(
     model_override: str | None = None,
 ) -> None:
     from ..app import get_config, get_memory
+    from ...utils.logging import set_run_event_sink, reset_run_event_sink
     config = get_config()
     memory = get_memory()
 
     _runs[run_id]["status"] = "running"
+    sink_token = set_run_event_sink(
+        lambda event_type, payload: _runs[run_id]["events"].append(_make_sse_event(event_type, payload))
+    )
 
     try:
         if run_type == "weekly":
@@ -128,17 +153,22 @@ async def _execute_run(
                 sse = _translate_langgraph_event(lg_event)
                 if sse:
                     _runs[run_id]["events"].append(sse)
-                    if sse["event"] == "agent_end" and "synthesize" in sse["data"]:
+                    if sse["event"] == "agent_end":
                         data = json.loads(sse["data"])
-                        final_report = data.get("report", "") or data.get("summary", "")
+                        if data.get("agent") == "synthesize":
+                            final_report = data.get("report", "") or data.get("summary", "")
             _runs[run_id]["status"] = "completed"
             _runs[run_id]["report"] = final_report
     except Exception as e:
+        error_payload = _run_error_payload(e)
         _runs[run_id]["status"] = "error"
-        _runs[run_id]["error"] = str(e)
+        _runs[run_id]["error"] = error_payload["message"]
+        _runs[run_id]["report"] = error_payload["message"]
         _runs[run_id]["events"].append(
-            _make_sse_event("error", {"message": str(e)})
+            _make_sse_event("error", error_payload)
         )
+    finally:
+        reset_run_event_sink(sink_token)
 
 
 @router.get("/stream/{run_id}")

@@ -10,6 +10,7 @@ from ..tools.market_tools import (
 )
 from ..tools.nse_tools import fetch_market_breadth
 from ..state.schema import MarketState
+from ..utils.logging import log, ToolCallLogger
 
 _SYSTEM = """You are a Technical Analyst specializing in Indian equity markets (NSE/BSE).
 
@@ -53,22 +54,31 @@ async def run_technical_analyst(state: MarketState) -> dict:
         prompt += f"Last week's technical feedback:\n{feedback}\n\n"
     prompt += "Provide your technical analysis with specific signals for each stock."
 
+    log.agent_start("TechnicalAnalyst")
     llm = make_llm(config)
     agent = create_react_agent(llm, _TOOLS, prompt=_SYSTEM)
+    cb = ToolCallLogger("TechnicalAnalyst")
 
     try:
-        result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
+        result = await agent.ainvoke(
+            {"messages": [HumanMessage(content=prompt)]},
+            config={"callbacks": [cb]},
+        )
     except Exception as e:
         if is_quota_error(e):
             llm_fb = get_fallback_llm(config)
             agent = create_react_agent(llm_fb, _TOOLS, prompt=_SYSTEM)
-            result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
+            result = await agent.ainvoke(
+                {"messages": [HumanMessage(content=prompt)]},
+                config={"callbacks": [cb]},
+            )
         else:
             raise
 
     final_message = result["messages"][-1]
     log_response_usage(final_message, f"{run_type}_analysis", "technical_analyst", llm.model)
     analysis = extract_text_content(final_message.content)
+    log.agent_done("TechnicalAnalyst", result["messages"])
     return {
         "technical_analysis": analysis,
         "messages": result["messages"],

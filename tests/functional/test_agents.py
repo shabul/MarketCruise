@@ -13,8 +13,8 @@ from src.agents.orchestrator import run_orchestrator
 
 
 @pytest.mark.functional
-def test_news_analyst_morning(morning_state):
-    result = run_news_analyst(morning_state)
+async def test_news_analyst_morning(morning_state):
+    result = await run_news_analyst(morning_state)
     assert "news_analysis" in result
     assert isinstance(result["news_analysis"], str)
     assert len(result["news_analysis"]) > 50
@@ -22,23 +22,23 @@ def test_news_analyst_morning(morning_state):
 
 
 @pytest.mark.functional
-def test_news_analyst_contains_sentiment(morning_state):
-    result = run_news_analyst(morning_state)
+async def test_news_analyst_contains_sentiment(morning_state):
+    result = await run_news_analyst(morning_state)
     text = result["news_analysis"].lower()
     has_sentiment = any(w in text for w in ["bullish", "bearish", "neutral", "positive", "negative"])
     assert has_sentiment, f"Expected sentiment word in: {text[:300]}"
 
 
 @pytest.mark.functional
-def test_news_analyst_midday(midday_state):
-    result = run_news_analyst(midday_state)
+async def test_news_analyst_midday(midday_state):
+    result = await run_news_analyst(midday_state)
     assert result["news_analysis"]
     assert "next_agent" not in result
 
 
 @pytest.mark.functional
-def test_technical_analyst_morning(morning_state):
-    result = run_technical_analyst(morning_state)
+async def test_technical_analyst_morning(morning_state):
+    result = await run_technical_analyst(morning_state)
     assert "technical_analysis" in result
     assert isinstance(result["technical_analysis"], str)
     assert len(result["technical_analysis"]) > 50
@@ -46,16 +46,16 @@ def test_technical_analyst_morning(morning_state):
 
 
 @pytest.mark.functional
-def test_technical_analyst_references_watchlist(morning_state):
-    result = run_technical_analyst(morning_state)
+async def test_technical_analyst_references_watchlist(morning_state):
+    result = await run_technical_analyst(morning_state)
     text = result["technical_analysis"]
     found = sum(1 for t in morning_state["watchlist"] if t in text)
     assert found >= 1, f"Expected at least one ticker in analysis: {text[:300]}"
 
 
 @pytest.mark.functional
-def test_portfolio_risk_morning(morning_state):
-    result = run_portfolio_risk(morning_state)
+async def test_portfolio_risk_morning(morning_state):
+    result = await run_portfolio_risk(morning_state)
     assert "portfolio_analysis" in result
     assert isinstance(result["portfolio_analysis"], str)
     assert len(result["portfolio_analysis"]) > 20
@@ -63,9 +63,9 @@ def test_portfolio_risk_morning(morning_state):
 
 
 @pytest.mark.functional
-def test_portfolio_risk_handles_no_holdings(morning_state):
+async def test_portfolio_risk_handles_no_holdings(morning_state):
     """Portfolio agent should never raise even if Kite has no data."""
-    result = run_portfolio_risk(morning_state)
+    result = await run_portfolio_risk(morning_state)
     text = result["portfolio_analysis"].lower()
     has_data = "₹" in result["portfolio_analysis"]
     has_fallback = any(w in text for w in ["no holdings", "unavailable", "no open", "no completed"])
@@ -73,8 +73,8 @@ def test_portfolio_risk_handles_no_holdings(morning_state):
 
 
 @pytest.mark.functional
-def test_options_analyst_morning(morning_state):
-    result = run_options_analyst(morning_state)
+async def test_options_analyst_morning(morning_state):
+    result = await run_options_analyst(morning_state)
     assert "options_analysis" in result
     assert isinstance(result["options_analysis"], str)
     assert len(result["options_analysis"]) > 10
@@ -82,16 +82,16 @@ def test_options_analyst_morning(morning_state):
 
 
 @pytest.mark.functional
-def test_options_analyst_skipped_for_evening(morning_state):
+async def test_options_analyst_skipped_for_evening(morning_state):
     state = dict(morning_state)
     state["run_type"] = "evening"
-    result = run_options_analyst(state)
+    result = await run_options_analyst(state)
     assert "skipped" in result["options_analysis"].lower()
     assert result["messages"] == []
 
 
 @pytest.mark.functional
-def test_orchestrator_with_seeded_analyses(morning_state):
+async def test_orchestrator_with_seeded_analyses(morning_state):
     """Inject realistic sub-agent outputs and verify orchestrator synthesizes them."""
     state = dict(morning_state)
     state["news_analysis"] = (
@@ -108,7 +108,7 @@ def test_orchestrator_with_seeded_analyses(morning_state):
     )
     state["options_analysis"] = "NIFTY PCR: 0.95 (neutral). TCS call OI highest at 3600."
 
-    result = run_orchestrator(state)
+    result = await run_orchestrator(state)
 
     assert "final_analysis" in result
     assert len(result["final_analysis"]) > 50
@@ -119,26 +119,26 @@ def test_orchestrator_with_seeded_analyses(morning_state):
 
 
 @pytest.mark.functional
-def test_orchestrator_predictions_have_stocks_key(morning_state):
+async def test_orchestrator_predictions_have_stocks_key(morning_state):
     state = dict(morning_state)
     state["news_analysis"] = "RELIANCE: Bullish. TCS: Bearish."
     state["technical_analysis"] = "RELIANCE trending up. TCS below MA50."
     state["portfolio_analysis"] = "No open positions."
     state["options_analysis"] = "Options data unavailable."
 
-    result = run_orchestrator(state)
+    result = await run_orchestrator(state)
     predictions = result.get("predictions", {})
     assert isinstance(predictions, dict)
 
 
 @pytest.mark.functional
-def test_orchestrator_messages_populated(morning_state):
+async def test_orchestrator_messages_populated(morning_state):
     state = dict(morning_state)
     state["news_analysis"] = "Market broadly positive."
     state["technical_analysis"] = "Indices near 52w highs."
     state["portfolio_analysis"] = "No holdings found."
     state["options_analysis"] = "PCR neutral."
 
-    result = run_orchestrator(state)
+    result = await run_orchestrator(state)
     assert "messages" in result
     assert len(result["messages"]) > 0

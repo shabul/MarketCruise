@@ -5,7 +5,7 @@ function App() {
   const [runModalOpen, setRunModalOpen] = React.useState(false);
 
   // Run state
-  const [runState, setRunState] = React.useState('idle');   // idle | running | completed
+  const [runState, setRunState] = React.useState('idle');   // idle | running | completed | error
   const [activeIdx, setActiveIdx] = React.useState(-1);
   const [runProgress, setRunProgress] = React.useState(0);
   const [streamText, setStreamText] = React.useState('');
@@ -15,8 +15,11 @@ function App() {
   const [toolCallsByAgent, setToolCallsByAgent] = React.useState({});
   const [memories, setMemories] = React.useState([]);
   const [predictions, setPredictions] = React.useState([]);
+  const [runError, setRunError] = React.useState('');
 
   const esRef = React.useRef(null);
+  const activeAgentRef = React.useRef('load_context');
+  const runErrorRef = React.useRef('');
 
   // Map agent id → index
   const agentIdx = React.useMemo(() => {
@@ -25,101 +28,6 @@ function App() {
     return m;
   }, []);
 
-  const startRun = useCallback(({ runType, watchlist, model, note }) => {
-    // Clean up previous SSE connection
-    if (esRef.current) { esRef.current.close(); esRef.current = null; }
-
-    // Reset state
-    setRunState('running');
-    setActiveIdx(0);
-    setRunProgress(0);
-    setStreamText('');
-    setStreaming(false);
-    setCompleted(false);
-    setToolCallsByAgent({});
-    setMemories([]);
-    setPredictions([]);
-
-    // Trigger run on server
-    API.triggerRun(runType, { watchlist: watchlist.length ? watchlist : undefined, model, notes: note })
-      .then(({ run_id }) => {
-        setRunId(run_id);
-        // Progress ticker (visual only — updates while running)
-        let prog = 0;
-        const progTimer = setInterval(() => {
-          prog = Math.min(prog + 2, 95);
-          setRunProgress(prog);
-        }, 300);
-
-        // Connect SSE stream
-        esRef.current = API.streamRun(run_id, {
-          onAgentStart: ({ agent }) => {
-            const i = agentIdx[agent] ?? 0;
-            setActiveIdx(i);
-            setRunProgress(0);
-            prog = 0;
-          },
-          onAgentEnd: ({ agent, summary, report }) => {
-            setRunProgress(100);
-            if (agent === 'synthesize' && report) {
-              setStreamText(report);
-            }
-          },
-          onToolStart: ({ tool, input }) => {
-            setToolCallsByAgent(prev => {
-              // Find which agent is currently active by checking which agent was last started
-              // Use the activeIdx ref via the closure
-              const agentId = AGENTS[agentIdx[tool] !== undefined ? agentIdx[tool] : activeIdx]?.id || 'unknown';
-              // Better: track current agent name via a ref
-              const cur = prev._currentAgent || 'unknown';
-              const existing = prev[cur] || [];
-              return { ...prev, [cur]: [...existing, { name: tool, input, done: false, running: true }] };
-            });
-          },
-          onToolEnd: ({ tool, output }) => {
-            setToolCallsByAgent(prev => {
-              const cur = prev._currentAgent || 'unknown';
-              const existing = [...(prev[cur] || [])];
-              const last = existing.findLastIndex(t => t.name === tool && t.running);
-              if (last !== -1) {
-                existing[last] = { ...existing[last], done: true, running: false, output };
-              }
-              return { ...prev, [cur]: existing };
-            });
-          },
-          onToken: ({ token }) => {
-            if (token) {
-              setStreamText(prev => prev + token);
-              setStreaming(true);
-            }
-          },
-          onComplete: ({ status, report }) => {
-            clearInterval(progTimer);
-            setRunState(status === 'completed' ? 'completed' : 'error');
-            setCompleted(status === 'completed');
-            setStreaming(false);
-            setActiveIdx(AGENTS.length);
-            if (report) setStreamText(report);
-            // Refresh predictions from DB
-            API.fetchPredictionsToday().then(setPredictions).catch(() => {});
-          },
-          onError: () => {
-            clearInterval(progTimer);
-            setRunState('idle');
-          },
-        });
-
-        // Track current agent name for tool call attribution
-        const origOnAgentStart = esRef.current;
-      })
-      .catch(() => setRunState('idle'));
-  }, [agentIdx]);
-
-  // On agent_start, also update _currentAgent in toolCallsByAgent
-  // We need a ref for activeIdx so SSE handlers can read it
-  const activeAgentRef = React.useRef('load_context');
-
-  // Rewire to properly track current agent
   const startRunWithTracking = useCallback((params) => {
     if (esRef.current) { esRef.current.close(); esRef.current = null; }
 
@@ -132,6 +40,8 @@ function App() {
     setToolCallsByAgent({});
     setMemories([]);
     setPredictions([]);
+    setRunError('');
+    runErrorRef.current = '';
 
     activeAgentRef.current = AGENTS[0]?.id || 'load_context';
 
@@ -178,22 +88,46 @@ function App() {
             return { ...prev, [cur]: existing };
           });
         },
+        onRunError: ({ message, kind, retry_after_seconds }) => {
+          const retry = retry_after_seconds ? ` Retry after about ${retry_after_seconds}s.` : '';
+          const prefix = kind === 'quota' ? 'Gemini quota exhausted.' : 'Run failed.';
+          const fullMessage = `${prefix} ${message}${retry}`.trim();
+          runErrorRef.current = fullMessage;
+          setRunError(fullMessage);
+        },
         onToken: ({ token }) => {
           if (token) { setStreamText(t => t + token); setStreaming(true); }
         },
-        onComplete: ({ status, report }) => {
+        onComplete: ({ status, report, error }) => {
           clearInterval(progTimer);
-          setRunState(status === 'completed' ? 'completed' : 'idle');
-          setCompleted(status === 'completed');
+          const failed = status !== 'completed';
+          setRunState(failed ? 'error' : 'completed');
+          setCompleted(!failed);
           setStreaming(false);
           setRunProgress(100);
-          setActiveIdx(AGENTS.length);
+          setActiveIdx(failed ? (agentIdx[activeAgentRef.current] ?? 0) : AGENTS.length);
+          if (failed) {
+            const msg = runErrorRef.current || error || report || 'Run failed before the model returned a report.';
+            runErrorRef.current = msg;
+            setRunError(msg);
+            setStreamText(msg);
+            return;
+          }
           if (report) setStreamText(report);
           API.fetchPredictionsToday().then(setPredictions).catch(() => {});
         },
-        onError: () => { clearInterval(progTimer); setRunState('idle'); },
+        onError: () => {
+          clearInterval(progTimer);
+          const msg = runErrorRef.current || 'Stream disconnected before the run completed.';
+          runErrorRef.current = msg;
+          setRunState('error');
+          setRunError(msg);
+        },
       });
-    }).catch(() => setRunState('idle'));
+    }).catch(() => {
+      setRunState('error');
+      setRunError('Failed to start the run.');
+    });
   }, [agentIdx]);
 
   React.useEffect(() => () => { if (esRef.current) esRef.current.close(); }, []);
@@ -323,6 +257,7 @@ function App() {
               streamText={streamText}
               streaming={streaming}
               completed={completed}
+              runError={runError}
               onRunNow={() => setRunModalOpen(true)}
               toolCallsByAgent={toolCallsByAgent}
               memories={memories}

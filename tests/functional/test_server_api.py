@@ -359,6 +359,71 @@ async def test_execute_run_passes_http_run_id_to_daily_graph(fastapi, monkeypatc
 
 @pytest.mark.functional
 @pytest.mark.asyncio
+async def test_execute_run_emits_error_event_for_quota_failures(fastapi, monkeypatch):
+    import src.server.routes.runs as runs_module
+    import src.graphs.daily_graph as daily_graph
+
+    async def fake_stream_daily(*args, **kwargs):
+        raise RuntimeError("429 RESOURCE_EXHAUSTED. Please retry in 12s.")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(daily_graph, "stream_daily", fake_stream_daily)
+
+    runs_module._runs["http-run-error"] = {
+        "id": "http-run-error",
+        "type": "morning",
+        "status": "pending",
+        "started_at": "2026-05-23T00:00:00",
+        "events": [],
+        "report": "",
+    }
+
+    await runs_module._execute_run("http-run-error", "morning")
+
+    run = runs_module._runs["http-run-error"]
+    assert run["status"] == "error"
+    assert "RESOURCE_EXHAUSTED" in run["error"]
+    assert run["events"]
+    event = run["events"][-1]
+    assert event["event"] == "error"
+    payload = json.loads(event["data"])
+    assert payload["kind"] == "quota"
+    assert payload["retry_after_seconds"] == "12"
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
+async def test_stream_endpoint_delivers_error_and_run_complete(fastapi, monkeypatch):
+    import src.graphs.daily_graph as daily_graph
+
+    async def fake_stream_daily(*args, **kwargs):
+        raise RuntimeError("429 RESOURCE_EXHAUSTED. Please retry in 12s.")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(daily_graph, "stream_daily", fake_stream_daily)
+
+    events = []
+    async with _client(fastapi) as client:
+        post_resp = await client.post("/run/morning")
+        run_id = post_resp.json()["run_id"]
+
+        async with client.stream("GET", f"/stream/{run_id}") as resp:
+            assert resp.status_code == 200
+            async for line in resp.aiter_lines():
+                if line.startswith("event:"):
+                    events.append(line.split(":", 1)[1].strip())
+                if line.startswith("data:") and events and events[-1] == "run_complete":
+                    payload = json.loads(line.split("data:", 1)[1].strip())
+                    assert payload["status"] == "error"
+                    assert "RESOURCE_EXHAUSTED" in payload["error"]
+                    break
+
+    assert "error" in events
+    assert "run_complete" in events
+
+
+@pytest.mark.functional
+@pytest.mark.asyncio
 async def test_api_config_returns_watchlist(fastapi):
     async with _client(fastapi) as client:
         resp = await client.get("/api/config")

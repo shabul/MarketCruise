@@ -4,6 +4,7 @@ from langgraph.prebuilt import create_react_agent
 from .base import make_llm, get_fallback_llm, is_quota_error, extract_text_content, log_response_usage
 from ..tools.news_tools import fetch_stock_news, fetch_sector_news, fetch_macro_news
 from ..state.schema import MarketState
+from ..utils.logging import log, ToolCallLogger
 
 _SYSTEM = """You are a News Analyst specializing in Indian equity markets (NSE/BSE).
 
@@ -42,22 +43,31 @@ async def run_news_analyst(state: MarketState) -> dict:
         prompt += f"Last week's feedback on news analysis:\n{feedback}\n\n"
     prompt += "Analyze the news and provide your structured assessment."
 
+    log.agent_start("NewsAnalyst")
     llm = make_llm(config)
     agent = create_react_agent(llm, _TOOLS, prompt=_SYSTEM)
+    cb = ToolCallLogger("NewsAnalyst")
 
     try:
-        result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
+        result = await agent.ainvoke(
+            {"messages": [HumanMessage(content=prompt)]},
+            config={"callbacks": [cb]},
+        )
     except Exception as e:
         if is_quota_error(e):
             llm_fb = get_fallback_llm(config)
             agent = create_react_agent(llm_fb, _TOOLS, prompt=_SYSTEM)
-            result = await agent.ainvoke({"messages": [HumanMessage(content=prompt)]})
+            result = await agent.ainvoke(
+                {"messages": [HumanMessage(content=prompt)]},
+                config={"callbacks": [cb]},
+            )
         else:
             raise
 
     final_message = result["messages"][-1]
     log_response_usage(final_message, f"{run_type}_analysis", "news_analyst", llm.model)
     analysis = extract_text_content(final_message.content)
+    log.agent_done("NewsAnalyst", result["messages"])
     return {
         "news_analysis": analysis,
         "messages": result["messages"],

@@ -516,8 +516,13 @@ function RunNowModal({ onClose, onStart }) {
 
   const remove = (t) => setWatchlist(watchlist.filter(x => x !== t));
   const add = () => {
-    const v = adding.trim().toUpperCase();
-    if (v && !watchlist.includes(v)) { setWatchlist([...watchlist, v]); setAdding(''); }
+    const raw = adding.trim();
+    if (!raw) return;
+    const items = raw.split(',').map(s => s.trim().toUpperCase()).filter(s => s && !watchlist.includes(s));
+    if (items.length > 0) {
+      setWatchlist([...watchlist, ...items]);
+    }
+    setAdding('');
   };
 
   return (

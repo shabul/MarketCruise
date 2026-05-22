@@ -21,10 +21,12 @@ _USAGE_SQLITE = None
 
 
 def _api_key() -> str:
-    """Return the Gemini API key, keeping GOOGLE_API_KEY in sync so langchain-google-genai ≥4.x doesn't complain."""
+    """Return the Gemini API key and keep GOOGLE_API_KEY as the single source for SDK calls."""
     key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY", "")
     if key:
         os.environ["GOOGLE_API_KEY"] = key
+        # Avoid the noisy dual-key warning from langchain-google-genai.
+        os.environ.pop("GEMINI_API_KEY", None)
     return key
 
 
@@ -47,6 +49,8 @@ def make_llm(config: dict, use_heavy: bool = False) -> ChatGoogleGenerativeAI:
         model=model,
         google_api_key=_api_key(),
         temperature=0.2,
+        timeout=config.get("timeout_seconds"),
+        max_retries=config.get("max_retries", 2),
     )
 
 
@@ -60,6 +64,8 @@ def get_fallback_llm(config: dict) -> ChatGoogleGenerativeAI:
         model=model,
         google_api_key=_api_key(),
         temperature=0.2,
+        timeout=config.get("timeout_seconds"),
+        max_retries=config.get("max_retries", 2),
     )
 
 

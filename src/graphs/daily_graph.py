@@ -12,12 +12,14 @@ from ..agents.orchestrator import run_orchestrator
 from ..agents.base import configure_usage_store
 from ..memory.memory_manager import MemoryManager
 from ..tools.market_tools import fetch_global_premarket, _compute_market_regime
+from ..utils.logging import log
 
 
 def build_daily_graph(memory: MemoryManager):
-    """Build and compile the daily analysis LangGraph with parallel agent fan-out."""
+    """Build and compile the daily analysis LangGraph with deterministic sequential routing."""
 
     def load_context(state: MarketState) -> dict:
+        log.context_start()
         memories, feedback = memory.load_run_context(
             run_type=state["run_type"],
             watchlist=state["watchlist"],
@@ -28,6 +30,13 @@ def build_daily_graph(memory: MemoryManager):
         market_regime = _compute_market_regime()
         global_context = fetch_global_premarket() if state["run_type"] == "morning" else ""
 
+        log.context_status(
+            run_id=run_id,
+            regime=market_regime,
+            memories=memories,
+            has_feedback=bool(feedback),
+            has_global=bool(global_context),
+        )
         return {
             "run_id": run_id,
             "retrieved_memories": memories,
@@ -37,13 +46,15 @@ def build_daily_graph(memory: MemoryManager):
         }
 
     def save_and_finish(state: MarketState) -> dict:
-        if state.get("predictions"):
+        has_preds = bool(state.get("predictions"))
+        if has_preds:
             memory.save_run_predictions(state["run_id"], state["predictions"])
 
         if state["run_type"] == "evening":
             _save_actuals_from_state(state, memory)
 
         memory.sqlite.finish_run(state["run_id"], state.get("final_analysis", ""))
+        log.run_saved(state["run_id"], has_preds)
         return {}
 
     graph = StateGraph(MarketState)
@@ -58,18 +69,11 @@ def build_daily_graph(memory: MemoryManager):
 
     graph.set_entry_point("load_context")
 
-    # Fan-out: all 4 analysts run in parallel after load_context
     graph.add_edge("load_context", "news_analyst")
-    graph.add_edge("load_context", "technical_analyst")
-    graph.add_edge("load_context", "portfolio_risk")
-    graph.add_edge("load_context", "options_analyst")
-
-    # Fan-in: LangGraph waits for all 4 before running synthesize
-    graph.add_edge("news_analyst", "synthesize")
-    graph.add_edge("technical_analyst", "synthesize")
-    graph.add_edge("portfolio_risk", "synthesize")
+    graph.add_edge("news_analyst", "technical_analyst")
+    graph.add_edge("technical_analyst", "portfolio_risk")
+    graph.add_edge("portfolio_risk", "options_analyst")
     graph.add_edge("options_analyst", "synthesize")
-
     graph.add_edge("synthesize", "save")
     graph.add_edge("save", END)
 
@@ -97,6 +101,7 @@ def _save_actuals_from_state(state: MarketState, memory: MemoryManager) -> None:
 def run_daily(run_type: str, config: dict, memory: MemoryManager, *, initial_run_id: str = "") -> str:
     """Execute a daily run and return the final analysis text."""
     configure_usage_store(memory.sqlite)
+    log.run_start(run_type, config.get("watchlist", []))
     graph = build_daily_graph(memory)
     initial_state: MarketState = {
         "run_id": initial_run_id,

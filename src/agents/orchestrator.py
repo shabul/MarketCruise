@@ -1,10 +1,11 @@
 import json
 import re
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from .base import make_llm, get_fallback_llm, get_usage_store, is_quota_error, extract_text_content, log_response_usage
 from ..state.schema import MarketState
+from ..utils.logging import log
 
 _SYSTEM = """You are the Chief Market Analyst for an Indian retail investor's personal trading assistant.
 
@@ -17,39 +18,43 @@ You receive analysis from four specialist agents:
 Your job:
 1. Synthesize all four analyses into one coherent final view
 2. Resolve any conflicts between news, technicals, and options positioning
-3. Produce a structured final report with:
-   - Market mood (1-2 sentences)
-   - Top 3 opportunities with direction, confidence, and entry rationale
-   - Risk flags (up to 3)
-   - Per-stock quick signals table
-   - For midday/evening: specific position calls
-4. Extract structured predictions as JSON at the end in this exact format:
-   ```json
-   {"stocks": [
-     {
-       "ticker": "TCS",
-       "direction": "BUY",
-       "confidence": "High",
-       "reasoning": "...",
-       "entry_price": 3520.00,
-       "stop_loss": 3275.00,
-       "target": 4000.00,
-       "timeframe": "1 week"
-     }
-   ]}
-   ```
-   Rules for price levels:
-   - entry_price: realistic current market price (use technical analysis data)
-   - stop_loss: 5-8% below entry for BUY, 5-8% above entry for SELL
-   - target: 10-15% above entry for BUY, 10-15% below entry for SELL
-   - timeframe: one of "1-3 days" | "1 week" | "2-4 weeks"
-
+3. Produce a concise, human-readable markdown report with these sections:
+   - `## Market Mood`
+   - `## Top Opportunities`
+   - `## Risk Flags`
+   - `## Quick Signals`
+   - `## Positioning Notes` for midday/evening runs
+4. Do not output raw JSON, YAML, or code blocks in the main report.
 5. Calibrate confidence based on market regime:
    - High Volatility regime: downgrade all confidences by one level
    - Trending Up: BUY signals aligned with trend get a slight confidence boost
    - Trending Down: SELL signals aligned with trend get a slight confidence boost
 
 Be decisive. The investor needs actionable calls, not hedged non-answers."""
+
+_PREDICTIONS_SYSTEM = """Return only valid JSON matching this exact schema:
+{"stocks":[
+  {
+    "ticker":"TCS",
+    "direction":"BUY",
+    "confidence":"High",
+    "reasoning":"Short rationale",
+    "entry_price":3520.0,
+    "stop_loss":3275.0,
+    "target":4000.0,
+    "timeframe":"1 week"
+  }
+]}
+
+Rules:
+- Output JSON only. No markdown fences. No commentary.
+- `direction` must be one of BUY, SELL, HOLD.
+- Include 0-3 stock ideas, but prefer 1-3 actionable ideas when evidence supports them.
+- Use realistic price levels from the technical analysis context.
+- For BUY: stop_loss 5-8% below entry, target 10-15% above entry.
+- For SELL: stop_loss 5-8% above entry, target 10-15% below entry.
+- For HOLD: keep entry_price, stop_loss, and target as numbers when possible, otherwise 0.
+- `timeframe` must be one of: 1-3 days, 1 week, 2-4 weeks."""
 
 
 async def run_orchestrator(state: MarketState) -> dict:
@@ -93,26 +98,43 @@ async def run_orchestrator(state: MarketState) -> dict:
     if accuracy_ctx:
         prompt += f"\n=== HISTORICAL ACCURACY (last 30 days) ===\n{accuracy_ctx}\n"
 
-    prompt += "\nSynthesize the above and produce the final report with structured predictions JSON."
+    prompt += (
+        "\nWrite the investor-facing report only. "
+        "Do not output JSON, code fences, or machine-readable objects."
+    )
 
+    log.orchestrator_start()
     llm = make_llm(config)
 
     try:
-        response = await llm.ainvoke([HumanMessage(content=prompt)], config={"configurable": {"system": _SYSTEM}})
+        response = await llm.ainvoke([SystemMessage(content=_SYSTEM), HumanMessage(content=prompt)])
     except Exception as e:
         if is_quota_error(e):
             llm = get_fallback_llm(config)
-            response = await llm.ainvoke([HumanMessage(content=prompt)])
+            response = await llm.ainvoke([SystemMessage(content=_SYSTEM), HumanMessage(content=prompt)])
         else:
             raise
 
     log_response_usage(response, f"{run_type}_analysis", "orchestrator", llm.model)
     final_analysis = extract_text_content(response.content)
-    predictions = _extract_predictions(final_analysis)
+    predictions = await _extract_predictions_with_llm(
+        llm=llm,
+        run_type=run_type,
+        market_regime=market_regime,
+        watchlist=watchlist,
+        news=news,
+        technical=technical,
+        portfolio=portfolio,
+        options=options,
+        final_analysis=final_analysis,
+    )
 
     devil_section = await _run_devils_advocate(llm, final_analysis, predictions)
     if devil_section:
         final_analysis = final_analysis + "\n\n" + devil_section
+
+    log.predictions_extracted(predictions)
+    log.final_analysis_preview(final_analysis)
 
     return {
         "final_analysis": final_analysis,
@@ -126,6 +148,12 @@ def _extract_predictions(text: str) -> dict:
     if match:
         try:
             return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            return json.loads(stripped)
         except json.JSONDecodeError:
             pass
     return {"stocks": []}
@@ -176,3 +204,93 @@ async def _run_devils_advocate(llm, final_analysis: str, predictions: dict) -> s
         return extract_text_content(da_response.content)
     except Exception:
         return ""
+
+
+async def _extract_predictions_with_llm(
+    *,
+    llm,
+    run_type: str,
+    market_regime: str,
+    watchlist: list[str],
+    news: str,
+    technical: str,
+    portfolio: str,
+    options: str,
+    final_analysis: str,
+) -> dict:
+    prompt = f"""Run type: {run_type}
+Market Regime: {market_regime}
+Watchlist: {", ".join(watchlist)}
+
+=== FINAL REPORT ===
+{final_analysis}
+
+=== NEWS ANALYST ===
+{news}
+
+=== TECHNICAL ANALYST ===
+{technical}
+
+=== PORTFOLIO RISK ===
+{portfolio}
+
+=== OPTIONS FLOW ===
+{options}
+"""
+    try:
+        response = await llm.ainvoke([SystemMessage(content=_PREDICTIONS_SYSTEM), HumanMessage(content=prompt)])
+        predictions = _extract_predictions(extract_text_content(response.content))
+        return _normalize_predictions(predictions, watchlist)
+    except Exception:
+        return {"stocks": []}
+
+
+def _normalize_predictions(predictions: dict, watchlist: list[str]) -> dict:
+    stocks = predictions.get("stocks", [])
+    if not isinstance(stocks, list):
+        return {"stocks": []}
+
+    normalized = []
+    allowed_dirs = {"BUY", "SELL", "HOLD"}
+    allowed_timeframes = {"1-3 days", "1 week", "2-4 weeks"}
+    watchlist_set = set(watchlist)
+    for item in stocks:
+        if not isinstance(item, dict):
+            continue
+        ticker = str(item.get("ticker", "")).upper().strip()
+        if not ticker or (watchlist_set and ticker not in watchlist_set):
+            continue
+        direction = str(item.get("direction", "HOLD")).upper().strip()
+        if direction not in allowed_dirs:
+            direction = "HOLD"
+        confidence = str(item.get("confidence", "Medium")).title().strip()
+        if confidence not in {"High", "Medium", "Low"}:
+            confidence = "Medium"
+        timeframe = str(item.get("timeframe", "1 week")).strip()
+        if timeframe not in allowed_timeframes:
+            timeframe = "1 week"
+
+        normalized.append({
+            "ticker": ticker,
+            "direction": direction,
+            "confidence": confidence,
+            "reasoning": str(item.get("reasoning", "")).strip(),
+            "entry_price": _to_float(item.get("entry_price")),
+            "stop_loss": _to_float(item.get("stop_loss")),
+            "target": _to_float(item.get("target")),
+            "timeframe": timeframe,
+        })
+
+    return {"stocks": normalized[:3]}
+
+
+def _to_float(value) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = value.replace("₹", "").replace(",", "").strip()
+        try:
+            return float(cleaned)
+        except ValueError:
+            return 0.0
+    return 0.0

@@ -355,7 +355,7 @@ function GlobalContextStrip() {
   );
 }
 
-function TodayView({ runState, activeIdx, runProgress, streamText, streaming, completed, onRunNow, toolCallsByAgent, memories, predictions, runId }) {
+function TodayView({ runState, activeIdx, runProgress, streamText, streaming, completed, runError, onRunNow, toolCallsByAgent, memories, predictions, runId }) {
   const [selectedIdx, setSelectedIdx] = useState(0);
   const [userPicked, setUserPicked] = useState(false);
 
@@ -375,12 +375,14 @@ function TodayView({ runState, activeIdx, runProgress, streamText, streaming, co
           <div className="page-sub">
             {runState === 'running' && <>Run active · agent {activeIdx + 1} of {AGENTS.length}</>}
             {runState === 'completed' && <>Completed · {predictions.length} predictions · dual-written to SQLite + ChromaDB</>}
+            {runState === 'error' && <>Run failed · inspect the error below and fix model quota or credentials</>}
             {runState === 'idle' && <>No active run · trigger a run to begin</>}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           {runState === 'running' && <span className="pill live"><span className="dot"></span>LIVE · streaming</span>}
           {runState === 'completed' && <span className="pill" style={{ background: 'var(--success-soft)', borderColor: 'rgba(47,125,82,.25)', color: '#1f5a37' }}><Icon name="check" size={10} stroke={2.4} /> completed</span>}
+          {runState === 'error' && <span className="pill error"><Icon name="x" size={10} stroke={2.4} /> failed</span>}
           {runState === 'idle' && <span className="pill idle"><span className="dot"></span>idle</span>}
           <button className="btn btn-accent" onClick={onRunNow}>
             <Icon name="play" size={11} /> Run now
@@ -398,7 +400,7 @@ function TodayView({ runState, activeIdx, runProgress, streamText, streaming, co
             <div className="card-hd">
               <Icon name="graph" size={14} style={{ color: 'var(--muted)' }} />
               <div className="ttl">Execution flow</div>
-              <div className="sub">load_context → 4 analysts (parallel) → synthesize</div>
+              <div className="sub">load_context → news → technical → portfolio → options → synthesize</div>
               <div style={{ flex: 1 }}></div>
               {runId && <span className="mono" style={{ fontSize: 11.5, color: 'var(--muted)' }}>run: {runId}</span>}
             </div>
@@ -437,6 +439,20 @@ function TodayView({ runState, activeIdx, runProgress, streamText, streaming, co
         </div>
 
         <div className="col">
+          {runState === 'error' && (
+            <div className="card">
+              <div className="card-hd">
+                <Icon name="x" size={14} style={{ color: 'var(--danger)' }} />
+                <div className="ttl">Run error</div>
+                <div className="sub">The backend ended the run with an explicit error.</div>
+              </div>
+              <div className="card-bd">
+                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--danger)', fontSize: 12 }}>
+                  {runError || 'Run failed.'}
+                </pre>
+              </div>
+            </div>
+          )}
           <FinalAnalysisCard text={streamText} completed={completed} streaming={streaming && !completed} />
           <PredictionsTable preds={predictions} completed={completed || runState === 'idle'} />
           <PortfolioSnapshot />

@@ -17,7 +17,7 @@ import sys
 from dotenv import load_dotenv, set_key
 import yaml
 
-load_dotenv()
+load_dotenv(override=True)
 
 
 def load_config(path: str = "config.yaml") -> dict:
