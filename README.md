@@ -422,17 +422,7 @@ MarketCruise/
 
 **[Pocket Brain](https://github.com/shabul/pocket-brain)** — An old Samsung Galaxy running a 24/7 hub that polls MarketCruise every hour via Tailscale, caches the analysis, shows your Zerodha portfolio, and automatically sends you a WhatsApp message every morning and evening with today's calls.
 
----
-
 <div align="center">
-
-**Built with [Claude Fable 5](https://claude.ai) — Max Effort mode via Claude Code**
-
-*Multi-agent architecture, ChromaDB memory design, Devil's Advocate review system,
-Zerodha integration, and the weekly self-improvement loop — all designed
-and iterated through an agentic coding session with Fable 5 Max effort.*
-
-<br/>
 
 [![Star this repo](https://img.shields.io/github/stars/shabul/MarketCruise?style=social)](https://github.com/shabul/MarketCruise)
 
