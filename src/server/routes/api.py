@@ -155,6 +155,56 @@ async def get_feedback():
     }
 
 
+@router.get("/market/gold")
+async def get_gold_prices(period: str = "1mo"):
+    import yfinance as yf
+    if period not in {"1mo", "3mo", "6mo", "1y"}:
+        period = "1mo"
+    PERIOD_DAYS = {"1mo": 30, "3mo": 90, "6mo": 180, "1y": 365}
+    days = PERIOD_DAYS[period]
+    symbols = [
+        ("Gold Futures", "GC=F", "USD/oz"),
+        ("Gold ETF India", "GOLDBEES.NS", "INR/unit"),
+    ]
+    response = []
+    for label, sym, unit in symbols:
+        try:
+            ticker = yf.Ticker(sym)
+            info  = ticker.fast_info
+            price = getattr(info, "last_price", None) or getattr(info, "regular_market_price", None)
+            prev  = getattr(info, "previous_close", None)
+            pct   = ((price - prev) / prev * 100) if (price and prev) else None
+            full  = ticker.history(period="1y", interval="1d")
+            hist  = full.tail(days) if not full.empty else full
+            high_52w = round(float(full["High"].max()), 2) if not full.empty else None
+            low_52w  = round(float(full["Low"].min()),  2) if not full.empty else None
+            history = []
+            for idx, row in hist.iterrows():
+                history.append({
+                    "date":   idx.strftime("%Y-%m-%d"),
+                    "open":   round(float(row["Open"]),  2),
+                    "high":   round(float(row["High"]),  2),
+                    "low":    round(float(row["Low"]),   2),
+                    "close":  round(float(row["Close"]), 2),
+                    "volume": int(row.get("Volume", 0) or 0),
+                })
+            response.append({
+                "label": label, "symbol": sym, "unit": unit,
+                "price": round(price, 2) if price else None,
+                "pct_change": round(pct, 2) if pct is not None else None,
+                "positive": (pct >= 0) if pct is not None else True,
+                "high_52w": high_52w, "low_52w": low_52w,
+                "history": history,
+            })
+        except Exception:
+            response.append({
+                "label": label, "symbol": sym, "unit": unit,
+                "price": None, "pct_change": None, "positive": True,
+                "high_52w": None, "low_52w": None, "history": [],
+            })
+    return response
+
+
 @router.get("/market/premarket")
 async def get_premarket():
     import yfinance as yf

@@ -141,6 +141,7 @@ function App() {
     { id: 'today',     name: 'Today',           icon: 'today',     badge: runState === 'running' ? 'LIVE' : '' },
     { id: 'history',   name: 'History',          icon: 'history' },
     { id: 'portfolio', name: 'Portfolio',         icon: 'portfolio' },
+    { id: 'gold',      name: 'Gold',             icon: 'gold' },
     { id: 'accuracy',  name: 'Accuracy',          icon: 'accuracy' },
   ];
   const nav2 = [
@@ -151,8 +152,8 @@ function App() {
 
   const screenLabels = {
     today: '01 Today', history: '02 History', portfolio: '03 Portfolio',
-    accuracy: '04 Accuracy', hypotheses: '05 Hypotheses',
-    feedback: '06 Weekly feedback', usage: '07 API usage',
+    gold: '04 Gold', accuracy: '05 Accuracy', hypotheses: '06 Hypotheses',
+    feedback: '07 Weekly feedback', usage: '08 API usage',
   };
 
   const now = new Date();
@@ -267,6 +268,7 @@ function App() {
           )}
           {view === 'history' && <HistoryView />}
           {view === 'portfolio' && <PortfolioView />}
+          {view === 'gold' && <GoldView />}
           {view === 'accuracy' && <AccuracyView />}
           {view === 'hypotheses' && <HypothesesView />}
           {view === 'feedback' && <FeedbackView />}

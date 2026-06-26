@@ -29,6 +29,7 @@ const Icon = ({name, size = 14, stroke = 1.6, style}) => {
     case 'doc': return <svg viewBox="0 0 16 16" style={s}><path d="M4 2.5h6l3 3v8a.5.5 0 0 1-.5.5h-9V3a.5.5 0 0 1 .5-.5z" {...p}/><path d="M10 2.5V6h3" {...p}/></svg>;
     case 'graph': return <svg viewBox="0 0 16 16" style={s}><circle cx="3.5" cy="8" r="1.5" {...p}/><circle cx="12.5" cy="4" r="1.5" {...p}/><circle cx="12.5" cy="12" r="1.5" {...p}/><path d="M5 7.2L11 4.8M5 8.8L11 11.2" {...p}/></svg>;
     case 'database': return <svg viewBox="0 0 16 16" style={s}><ellipse cx="8" cy="4" rx="5" ry="1.5" {...p}/><path d="M3 4v8c0 .83 2.24 1.5 5 1.5s5-.67 5-1.5V4M3 8c0 .83 2.24 1.5 5 1.5s5-.67 5-1.5" {...p}/></svg>;
+    case 'gold': return <svg viewBox="0 0 16 16" style={s}><path d="M4 11.5h8l-1.5-5.5h-5z" {...p}/><rect x="2.5" y="11.5" width="11" height="2.5" rx=".5" {...p}/><path d="M6.5 3.5h3M8 3.5v2" {...p}/></svg>;
     default: return null;
   }
 };

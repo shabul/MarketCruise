@@ -22,6 +22,7 @@ window.API = {
   deleteHypothesis:     (id) => fetch(`/api/hypotheses/${id}`, { method: 'DELETE' }).then(_json),
   fetchFeedback:        () => fetch('/api/feedback').then(_json),
   fetchPremarket:       () => fetch('/api/market/premarket').then(_json),
+  fetchGoldPrices:      (period = '1mo') => fetch(`/api/market/gold?period=${period}`).then(_json),
   fetchConfig:          () => fetch('/api/config').then(_json),
   triggerRun:           (type, body = {}) => fetch(`/run/${type}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(_json),
 
